@@ -18,3 +18,6 @@ include make/app/behat.mk
 
 # Package rules
 include make/app/package.mk
+
+# Package rules
+include make/app/node.mk
