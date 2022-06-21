@@ -7,7 +7,7 @@ How to use
 
 - Add this repo as a git submodule in your project :
 
-`git submodule add https://github.com/barlito/php-make-rules make`
+`git submodule add git@github.com:barlito/php-make-rules.git make`
 
 
 - To use this project you just need to include the entrypoint.mk file in your own Makefile :
