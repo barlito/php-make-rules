@@ -8,4 +8,4 @@ deploy.ci:
 	make docker.command exec_params="-t" args="chmod +x bin/console"
 	make doctrine.migrate
 	make doctrine.load_fixtures
-	make symfony.security_check
+	#make symfony.security_check
