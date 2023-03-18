@@ -16,13 +16,18 @@ docker.deploy:
 	docker-compose pull
 	docker stack deploy -c docker-compose.yml $(stack_name)
 
-docker.undeploy:
-	docker stack rm $(stack_name)
-
 ### CI rules
 docker.deploy.ci:
 	docker-compose pull
 	docker-compose -p $(stack_name) -f docker-compose.yml -f docker-compose-ci.yml up -d
+
+### Prod rules
+docker.deploy.prod:
+	docker-compose pull
+	docker stack deploy -c docker-compose-prod.yml $(stack_name)
+
+docker.undeploy:
+	docker stack rm $(stack_name)
 
 docker.undeploy.ci:
 	docker-compose -p $(stack_name) down
