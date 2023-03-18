@@ -1,5 +1,8 @@
 ### Doctrine rules
 
+doctrine.diff:
+	docker exec -it $(app_container_id) bin/console doctrine:migrations:diff
+
 doctrine.migrate:
 	docker exec -t $(app_container_id) bin/console doctrine:database:create --if-not-exists
 	docker exec -t $(app_container_id) bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration
