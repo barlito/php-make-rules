@@ -9,3 +9,6 @@ include make/stack/ci_cd.mk
 
 # Deployment rules
 include make/stack/deployment.mk
+
+# Permissions rules
+include make/stack/permissions.mk
