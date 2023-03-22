@@ -26,6 +26,9 @@ docker.deploy.prod:
 	docker-compose pull
 	docker stack deploy -c docker-compose-prod.yml $(stack_name)
 
+docker.service.update:
+	docker service update $(args)
+
 docker.undeploy:
 	docker stack rm $(stack_name)
 
