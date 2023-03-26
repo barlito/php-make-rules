@@ -36,7 +36,7 @@ docker.undeploy.ci:
 	docker-compose -p $(stack_name) down
 
 docker.wait_stack:
-	until $$(curl -sI "https://$(project_url)/" | grep -iq 'Server: nginx') ; do \
+	until $$(curl -ksI "https://$(project_url)/" | grep -iq 'Server: nginx') ; do \
     	printf '.' ; \
     	sleep 0.5 ; \
     done
