@@ -18,12 +18,12 @@ docker.deploy:
 
 ### CI rules
 docker.deploy.ci:
-	docker-compose pull
+	docker-compose -f docker-compose.yml -f docker-compose-ci.yml pull
 	docker-compose -p $(stack_name) -f docker-compose.yml -f docker-compose-ci.yml up -d
 
 ### Prod rules
 docker.deploy.prod:
-	docker-compose pull
+	docker-compose -f docker-compose-prod.yml pull
 	docker stack deploy -c docker-compose-prod.yml $(stack_name)
 
 docker.service.update:

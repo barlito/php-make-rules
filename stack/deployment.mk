@@ -5,6 +5,7 @@ bash:
 
 ### Development rules
 deploy:
+	make set_file_permissions
 	make docker.deploy
 	make docker.wait_stack
 	make composer.install
@@ -36,3 +37,6 @@ update.service:
 
 undeploy:
 	make docker.undeploy
+
+set_file_permissions:
+	sudo setfacl -R -m u:`whoami`:rwx -m g:`whoami`:rwx -m o:rwx -m m:rwx . && sudo setfacl -R -d -m u:`whoami`:rwx -m g:`whoami`:rwx -m o:rwx -m m:rwx . 2>/dev/null
