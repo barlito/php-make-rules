@@ -7,7 +7,7 @@ bash:
 deploy:
 	make set_file_permissions
 	make docker.deploy
-	castor wait-nginx-container
+	castor barlito:castor:wait-nginx-container
 	make composer.install
 	make doctrine.migrate
 	make doctrine.load_fixtures
