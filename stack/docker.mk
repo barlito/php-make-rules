@@ -13,17 +13,17 @@ docker.run:
 
 ### Development rules
 docker.deploy:
-	docker-compose pull
+	docker compose pull
 	docker stack deploy -c docker-compose.yml $(stack_name)
 
 ### CI rules
 docker.deploy.ci:
-	docker-compose -f docker-compose.yml -f docker-compose-ci.yml pull
-	docker-compose -p $(stack_name) -f docker-compose.yml -f docker-compose-ci.yml up -d
+	docker compose -f docker-compose.yml -f docker-compose-ci.yml pull
+	docker compose -p $(stack_name) -f docker-compose.yml -f docker-compose-ci.yml up -d
 
 ### Prod rules
 docker.deploy.prod:
-	docker-compose -f docker-compose-prod.yml pull
+	docker compose -f docker-compose-prod.yml pull
 	docker stack deploy -c docker-compose-prod.yml $(stack_name)
 
 docker.service.update:
@@ -33,7 +33,7 @@ docker.undeploy:
 	docker stack rm $(stack_name)
 
 docker.undeploy.ci:
-	docker-compose -p $(stack_name) down
+	docker compose -p $(stack_name) down
 
 docker.wait_stack:
 	until $$(curl -ksI "https://$(project_url)/" | grep -iq 'Server: nginx') ; do \
