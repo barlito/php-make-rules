@@ -34,15 +34,3 @@ docker.undeploy:
 
 docker.undeploy.ci:
 	docker compose -p $(stack_name) down
-
-docker.wait_stack:
-	until $$(curl -ksI "https://$(project_url)/" | grep -iq 'Server: nginx') ; do \
-    	printf '.' ; \
-    	sleep 0.5 ; \
-    done
-
-docker.wait_stack.ci:
-	until $$(curl -sI http://localhost:8081/ | grep -q 'Server: nginx') ; do \
-    	printf '.' ; \
-    	sleep 0.5 ; \
-    done
