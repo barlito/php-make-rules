@@ -25,8 +25,7 @@ docker.deploy.ci:
 
 ### Prod rules
 docker.deploy.prod:
-	docker compose -f docker-compose-prod.yml pull || true
-	docker compose -f docker-compose.yml -f docker-compose-prod.yml build
+	docker compose -f docker-compose-prod.yml pull
 	docker stack deploy -c docker-compose-prod.yml $(stack_name)
 
 docker.service.update:
