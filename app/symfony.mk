@@ -3,7 +3,7 @@
 symfony.install:
 	rm -Rf tmp/
 	docker exec -t $(app_container_id) bash -c "composer create-project symfony/skeleton tmp --prefer-dist --no-progress --no-interaction"
-	sudo chown -R $(shell id -u):$(shell id -g) .
+	make set_file_permissions
 	cd tmp && cp -Rp . .. && cd -
 	rm -Rf tmp/
 

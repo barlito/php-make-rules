@@ -11,12 +11,12 @@ deploy:
 	make composer.install
 	make doctrine.migrate
 	make doctrine.load_fixtures
-	#make symfony.security_check
+	make symfony.security_check
 
 ### CI/CD rules
 deploy.ci:
 	make docker.deploy.ci
-	make docker.wait_stack.ci
+	castor barlito:castor:wait-nginx-container
 	make composer.command args="config -g github-oauth.github.com $(github_token)"
 	make composer.install
 	make docker.command exec_params="-t" args="chmod +x bin/console"
@@ -27,7 +27,7 @@ deploy.ci:
 ### Prod rules
 deploy.prod:
 	make docker.deploy.prod
-	make docker.wait_stack
+	castor barlito:castor:wait-nginx-container
 	make doctrine.migrate
 
 update.service:

@@ -7,7 +7,6 @@ use Castor\Attribute\AsTask;
 use Exception;
 use function Castor\io;
 
-const PROJECT_IMAGE_NAME = 'php-starter-php';
 const STACK_NAME_PLACEHOLDER = 'starter';
 const STACK_NAME_FILES = [
     'castor.php',
@@ -24,9 +23,6 @@ function setStackName(
     string $stackName,
 ): void
 {
-    // Replace docker image name
-    replaceStringInFiles(PROJECT_IMAGE_NAME, $stackName . '-php', ['docker-compose.yml']);
-
     replaceStringInFiles(STACK_NAME_PLACEHOLDER, $stackName, STACK_NAME_FILES);
 
     io()->success('Stack name has been set.');

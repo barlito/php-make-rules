@@ -13,17 +13,20 @@ docker.run:
 
 ### Development rules
 docker.deploy:
-	docker compose pull
+	docker compose pull || true
+	docker compose build
 	docker stack deploy -c docker-compose.yml $(stack_name)
 
 ### CI rules
 docker.deploy.ci:
-	docker compose -f docker-compose.yml -f docker-compose-ci.yml pull
+	docker compose -f docker-compose.yml -f docker-compose-ci.yml pull || true
+	docker compose -f docker-compose.yml -f docker-compose-ci.yml build
 	docker compose -p $(stack_name) -f docker-compose.yml -f docker-compose-ci.yml up -d
 
 ### Prod rules
 docker.deploy.prod:
-	docker compose -f docker-compose-prod.yml pull
+	docker compose -f docker-compose-prod.yml pull || true
+	docker compose -f docker-compose.yml -f docker-compose-prod.yml build
 	docker stack deploy -c docker-compose-prod.yml $(stack_name)
 
 docker.service.update:
