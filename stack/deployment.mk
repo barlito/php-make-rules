@@ -8,6 +8,7 @@ deploy:
 	make set_file_permissions
 	make docker.deploy
 	castor barlito:castor:wait-php-container
+	castor barlito:castor:wait-db-container
 	make composer.install
 	make doctrine.migrate
 	make doctrine.load_fixtures
@@ -17,6 +18,7 @@ deploy:
 deploy.ci:
 	make docker.deploy.ci
 	castor barlito:castor:wait-php-container
+	castor barlito:castor:wait-db-container
 	make composer.command args="config -g github-oauth.github.com $(github_token)"
 	make composer.install
 	make docker.command exec_params="-t" args="chmod +x bin/console"
@@ -28,6 +30,7 @@ deploy.ci:
 deploy.prod:
 	make docker.deploy.prod
 	castor barlito:castor:wait-php-container
+	castor barlito:castor:wait-db-container
 	make doctrine.migrate
 
 update.service:
