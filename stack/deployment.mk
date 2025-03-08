@@ -32,7 +32,7 @@ deploy.prod:
 
 update.service:
 	make docker.service.update args="$(service_update_args)"
-	make docker.wait_stack
+	castor barlito:castor:wait-php-container
 	make doctrine.migrate
 
 undeploy:
