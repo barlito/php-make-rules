@@ -9,6 +9,7 @@ deploy:
 	make docker.deploy
 	castor barlito:castor:wait-php-container
 	make composer.install
+	# Let's migrate in container entrypoint and run fixtures in dev entrypoint
 	make doctrine.migrate
 	make doctrine.load_fixtures
 	make symfony.security_check
@@ -17,6 +18,14 @@ deploy:
 deploy.ci:
 	make docker.deploy.ci
 	castor barlito:castor:wait-php-container
+	docker ps -a
+	docker logs ytcg_php
+	docker inspect ytcg_php --format='{{.State.ExitCode}}'
+	docker inspect ytcg_php --format='{{.State.Status}}'
+	docker inspect ytcg_php --format='{{.State.Error}}'
+	docker inspect ytcg_php --format='{{.Config.Cmd}}'
+
+	echo $(app_container_id)
 	make composer.command args="config -g github-oauth.github.com $(github_token)"
 	make composer.install
 	make docker.command exec_params="-t" args="chmod +x bin/console"
