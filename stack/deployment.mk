@@ -31,6 +31,7 @@ deploy.prod:
 	make docker.deploy.prod
 	castor barlito:castor:wait-php-container
 	castor barlito:castor:wait-db-container
+	make doctrine.migrate
 
 update.service:
 	make docker.service.update args="$(service_update_args)"
