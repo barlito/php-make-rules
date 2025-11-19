@@ -143,11 +143,10 @@ function waitPhpContainerSimple(int $attempt = 0): void
 
 
 #[AsTask('wait-db-container')]
-function waitDbAndCheckPhp(int $attempt = 0): void
+function waitDbContainer(int $attempt = 0): void
 {
     $context = context();
     $STACK_NAME = $context->environment['STACK_NAME'];
-    $phpContainer = "{$STACK_NAME}_php";
     $dbContainer = "{$STACK_NAME}_db";
     $maxAttempts = 60;
 
@@ -160,62 +159,16 @@ function waitDbAndCheckPhp(int $attempt = 0): void
     try {
         wait_for_docker_container(
             containerName: $dbContainer,
-            message: "Checking if {$dbContainer} is running...",
+            message: "Checking if {$dbContainer} is running and healthy...",
         );
-        io()->success("Database container is running!");
+        io()->success("Database container is running and healthy!");
     } catch (DockerContainerStateException $e) {
         if ($attempt >= $maxAttempts) {
-            io()->error("Database container {$dbContainer} is not running after {$maxAttempts} retries.");
+            io()->error("Database container {$dbContainer} is not ready after {$maxAttempts} retries.");
             throw $e;
         }
-        io()->warning("Database container {$dbContainer} is not yet running, retrying... ({$attempt}/{$maxAttempts})");
+        io()->warning("Database container {$dbContainer} is not yet ready, retrying... ({$attempt}/{$maxAttempts})");
         sleep(1);
-        waitDbAndCheckPhp($attempt + 1);
-        return;
-    }
-
-    try {
-        wait_for_docker_container(
-            containerName: $phpContainer,
-            message: "Checking if PHP container can access the database...",
-            containerChecker: function ($containerId) use ($maxAttempts) {
-                $databaseUrlCheck = run("docker exec $containerId sh -c 'grep -q ^DATABASE_URL= .env && echo found || echo not_found'",
-                    context: context()->withAllowFailure());
-                $hasDatabaseUrl = trim($databaseUrlCheck->getOutput()) === 'found';
-
-                if (!$hasDatabaseUrl) {
-                    io()->info("No DATABASE_URL found in .env. Skipping database connectivity check.");
-                    return true;
-                }
-
-                io()->info("DATABASE_URL detected. Checking database connectivity...");
-                $attempt = 0;
-
-                while ($attempt < $maxAttempts) {
-                    try {
-                        $dbReady = run("docker exec $containerId php bin/console dbal:run-sql -q \"SELECT 1\"",
-                            context: context()->withAllowFailure());
-
-                        if ($dbReady->isSuccessful()) {
-                            io()->success("The database is now ready and PHP can connect.");
-                            return true;
-                        }
-
-                        io()->warning("Still waiting for database connectivity... " . ($maxAttempts - $attempt) . " attempts left.");
-                        sleep(1);
-                        $attempt++;
-                    } catch (\Throwable $e) {
-                        io()->error("Error checking database connectivity: " . $e->getMessage());
-                        return false;
-                    }
-                }
-
-                io()->error("Database is not reachable by PHP after {$maxAttempts} attempts.");
-                return false;
-            }
-        );
-    } catch (DockerContainerStateException $e) {
-        io()->error("PHP container {$phpContainer} is not running while checking DB connectivity.");
-        throw $e;
+        waitDbContainer($attempt + 1);
     }
 }
