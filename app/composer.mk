@@ -9,3 +9,11 @@ composer.require:
 composer.install:
 	docker exec -t $(app_container_id) bash -c "composer install --optimize-autoloader --no-interaction"
 
+composer.update:
+	docker exec -t $(app_container_id) bash -c "composer update --no-interaction"
+
+composer.outdated:
+	docker exec -t $(app_container_id) bash -c "composer outdated --direct"
+
+composer.validate:
+	docker exec -t $(app_container_id) bash -c "composer validate --strict"
