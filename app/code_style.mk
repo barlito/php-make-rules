@@ -4,11 +4,31 @@ CSFIXER_OPT ?=
 PHPSTAN_OPT ?=
 RECTOR_OPT ?=
 
+### Batch install
+code_quality.install:
+	make phpcs.install
+	make phpmd.install
+	make cs_fixer.install
+	make phpstan.install
+	make rector.install
+
+test.install:
+	make phpunit.install
+	make behat.install
+	make behat.init
+
 ### Aggregate checks
 check_style:
 	make phpcs
 	make phpmd
 	make cs_fixer.dry_run
+	make phpstan
+	make rector.dry_run
+
+### Aggregate fixes
+fix_style:
+	make cs_fixer
+	make rector
 
 ### PHP CodeSniffer
 phpcs.install:
