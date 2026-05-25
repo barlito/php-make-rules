@@ -1,25 +1,33 @@
 ### Node rules
 
-node_ports=
-node_container_name="$(stack_name)_node"
-node_exec_params="-it --rm --name $(node_container_name) $(ports) -v $(shell pwd)/app:/usr/src/app -w /usr/src/app"
+node_image ?= node:22
+node_exec_params=--rm -v $(shell pwd):/app -w /app
 
-### Default rule
-node.default:
-	make docker.run \
-		exec_params=$(node_exec_params) \
-		docker_image="node:18" \
-		container_command="$(container_command)"
+### npm rules
+npm.command:
+	docker run $(node_exec_params) $(node_image) npm $(args)
 
-### Node rules
+npm.install:
+	make npm.command args="install"
+
+npm.build:
+	make npm.command args="run build"
+
+npm.dev:
+	make npm.command args="run dev"
+
+npm.watch:
+	make npm.command args="run watch"
 
 ### Yarn rules
-yarn:
-	make node.default container_command="yarn $(args)"
+yarn.command:
+	docker run $(node_exec_params) $(node_image) yarn $(args)
 
-yarn.dev-server:
-	make yarn
-	make node.default \
- 		container_command="yarn dev-server" \
- 		node_container_name="$(node_container_name)_dev_server" \
-		ports="-p 8081:8081/tcp"
+yarn.install:
+	make yarn.command args="install"
+
+yarn.build:
+	make yarn.command args="build"
+
+yarn.dev:
+	make yarn.command args="dev"
