@@ -5,8 +5,10 @@ namespace Barlito\Castor;
 use Castor\Attribute\AsTask;
 use Castor\Exception\WaitFor\DockerContainerStateException;
 
-use function Castor\io;
+use function Castor\capture;
 use function Castor\context;
+use function Castor\io;
+use function Castor\run;
 use function Castor\wait_for_docker_container;
 
 #[AsTask('wait-php-container')]
