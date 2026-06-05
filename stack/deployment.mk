@@ -12,6 +12,7 @@ deploy:
 	make doctrine.migrate
 	make doctrine.load_fixtures
 	make symfony.security_check
+	-make composer.outdated
 
 ### CI/CD rules
 deploy.ci:
