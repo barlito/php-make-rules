@@ -3,6 +3,7 @@
 CSFIXER_OPT ?=
 PHPSTAN_OPT ?=
 RECTOR_OPT ?=
+castor_paths ?= castor.php
 
 ### Batch install
 code_quality.install:
@@ -22,12 +23,14 @@ check_style:
 	make phpcs
 	make phpmd
 	make cs_fixer.dry_run
+	make cs_fixer.castor.dry_run
 	make phpstan
 	make rector.dry_run
 
 ### Aggregate fixes
 fix_style:
 	make cs_fixer
+	make cs_fixer.castor
 	make rector
 
 ### PHP CodeSniffer
@@ -53,6 +56,12 @@ cs_fixer:
 
 cs_fixer.dry_run:
 	docker exec -t $(app_container_id) php -d "memory_limit=-1" vendor/bin/php-cs-fixer fix --dry-run --diff --config=$(config_cs_fixer) $(CSFIXER_OPT)
+
+cs_fixer.castor:
+	docker exec -t $(app_container_id) php -d "memory_limit=-1" vendor/bin/php-cs-fixer fix $(castor_paths) --diff --config=$(config_cs_fixer) $(CSFIXER_OPT)
+
+cs_fixer.castor.dry_run:
+	docker exec -t $(app_container_id) php -d "memory_limit=-1" vendor/bin/php-cs-fixer fix $(castor_paths) --dry-run --diff --config=$(config_cs_fixer) $(CSFIXER_OPT)
 
 ### PHPStan
 phpstan.install:

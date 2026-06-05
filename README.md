@@ -42,6 +42,7 @@ import('make/castor_entrypoint.php');
 | `composer.outdated` | Show outdated direct deps |
 | `composer.validate` | Validate composer.json |
 | `cs_fixer` / `cs_fixer.dry_run` | PHP CS Fixer (fix / check) |
+| `cs_fixer.castor` / `cs_fixer.castor.dry_run` | PHP CS Fixer on Castor files (fix / check) |
 | `phpcs` | PHP CodeSniffer |
 | `phpmd` | PHP Mess Detector |
 | `phpstan` | PHPStan static analysis |
@@ -89,6 +90,7 @@ import('make/castor_entrypoint.php');
 CSFIXER_OPT ?=     # Extra options for PHP CS Fixer
 PHPSTAN_OPT ?=     # Extra options for PHPStan
 RECTOR_OPT ?=      # Extra options for Rector
+castor_paths ?= castor.php  # Castor files targeted by cs_fixer.castor
 PHPUNIT_OPT ?=     # Extra options for PHPUnit
 BEHAT_OPT ?=       # Extra options for Behat
 node_image ?= node:22  # Node.js Docker image
