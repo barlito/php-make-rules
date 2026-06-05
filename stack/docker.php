@@ -38,6 +38,8 @@ function waitPhpContainer(int $attempt = 0): void
         }
         sleep(1);
         waitPhpContainer($attempt + 1);
+
+        return;
     }
 }
 
@@ -68,7 +70,14 @@ function waitDbContainer(int $attempt = 0): void
             throw $e;
         }
         sleep(1);
+        // The recursive call performs the full readiness check (container health
+        // AND the DNS probe below). Returning here prevents the parent frames from
+        // re-running the DNS probe as the recursion unwinds — otherwise it is
+        // executed once per elapsed startup second, spamming the output and making
+        // the step look stuck on the first (slow) deploy.
         waitDbContainer($attempt + 1);
+
+        return;
     }
 
     $phpContainerId = trim(capture("docker ps --filter name={$phpContainer} -q", context: context()->withAllowFailure()));
