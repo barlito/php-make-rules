@@ -19,6 +19,7 @@ test.install:
 
 ### Aggregate checks
 check_style:
+	make composer.validate
 	make phpcs
 	make phpmd
 	make cs_fixer.dry_run

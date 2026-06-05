@@ -46,7 +46,7 @@ import('make/castor_entrypoint.php');
 | `phpmd` | PHP Mess Detector |
 | `phpstan` | PHPStan static analysis |
 | `rector` / `rector.dry_run` | Rector refactoring |
-| `check_style` | Run phpcs + phpmd + cs_fixer.dry_run |
+| `check_style` | Run composer.validate + phpcs + phpmd + cs_fixer.dry_run |
 | `phpunit` | Run PHPUnit tests |
 | `behat` / `behat.init` | Run/init Behat |
 | `doctrine.migrate` | Create DB + run migrations |
