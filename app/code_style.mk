@@ -7,7 +7,6 @@ RECTOR_OPT ?=
 ### Batch install
 code_quality.install:
 	make phpcs.install
-	make phpmd.install
 	make cs_fixer.install
 	make phpstan.install
 	make rector.install
@@ -21,7 +20,6 @@ test.install:
 check_style:
 	make composer.validate
 	make phpcs
-	make phpmd
 	make cs_fixer.dry_run
 	make phpstan
 	make rector.dry_run
