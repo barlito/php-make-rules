@@ -79,8 +79,8 @@ import('make/castor_entrypoint.php');
 
 | Task | Description |
 |------|-------------|
-| `wait-php-container` | Wait for PHP container to be ready (60 retries) |
-| `wait-db-container` | Wait for DB container to be healthy (60 retries) |
+| `wait-php-container` | Wait for PHP container to be running and healthy (3 min timeout) |
+| `wait-db-container` | Wait for DB container to be healthy and reachable from PHP (3 min timeout) |
 | `set-stack-name` | Replace stack name placeholder in project files |
 
 ## Overridable Variables
