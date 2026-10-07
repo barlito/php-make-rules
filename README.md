@@ -81,6 +81,7 @@ import('make/castor_entrypoint.php');
 |------|-------------|
 | `wait-php-container` | Wait for PHP container to be running and healthy (3 min timeout) |
 | `wait-db-container` | Wait for DB container to be healthy and reachable from PHP (3 min timeout) |
+| `assert-deployed <service> <image> [--timeout=180] [--settle=10]` | Fail unless the Swarm service runs `<image>` with every replica running, healthy and still the same tasks after `--settle` seconds. Run it after `docker service update` / `docker stack deploy`, which exit 0 even when Swarm rolled the update back |
 | `set-stack-name` | Replace stack name placeholder in project files |
 
 ## Overridable Variables
