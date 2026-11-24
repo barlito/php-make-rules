@@ -10,9 +10,13 @@ mkdir "$work/bin"
 cat > "$work/bin/docker" <<'SHIM'
 #!/bin/sh
 echo "docker $*" >> "$FAKE_DOCKER_LOG"
+echo "docker $*" >> "$FAKE_DOCKER_ALL_LOG"
 case "$1" in
   ps) echo "$FAKE_CID" ;;
-  exec) case "$*" in *"ls -1t"*) echo "$FAKE_LATEST" ;; esac ;;
+  exec) case "$*" in
+    *"ls -1t"*) echo "$FAKE_LATEST" ;;
+    *"test -f"*) [ -z "$FAKE_MISSING" ] ;;
+  esac ;;
 esac
 SHIM
 cat > "$work/bin/castor" <<'SHIM'
@@ -21,7 +25,9 @@ echo "castor log noise on stdout"
 for arg in "$@"; do case "$arg" in --output=*) printf '%s' "$FAKE_VERSION" > "${arg#--output=}" ;; esac; done
 SHIM
 chmod +x "$work/bin/docker" "$work/bin/castor"
-export PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$work/docker.log"
+# the *_ALL_* logs are never truncated: the final "stack rm" check reads them
+export PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$work/docker.log" FAKE_DOCKER_ALL_LOG="$work/docker.all.log" ALL_OUT="$work/out.all.log"
+: > "$ALL_OUT"
 unset TAG RESTORE
 
 ln -s "$root" "$work/make"
@@ -48,6 +54,7 @@ run_make() {
   local fx="$1"; shift
   out="$(cd "$work/$fx" && make --no-print-directory "$@" 2>&1)"
   status=$?
+  printf '%s\n' "$out" >> "$ALL_OUT"
 }
 
 contains() { grep -qF -- "$2" <<< "$1"; }
@@ -92,7 +99,7 @@ check "deploy.prod defaults" carapp 0 -n deploy.prod && {
     "castor barlito:castor:assert-deployed carapp_message_worker barlito/carapp-worker:v1.2.0 --timeout=180 --settle=10" \
     "castor barlito:castor:wait-db-container" \
     "doctrine:migrations:migrate --no-interaction --allow-no-migration" \
-    "curl -fsS -o /dev/null -w \"  HTTP %{http_code}\\n\" https://carapp.barlito.fr/" \
+    "curl -fsS --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 3 -o /dev/null -w \"  HTTP %{http_code}\\n\" https://carapp.barlito.fr/" \
     "docker container prune -f --filter label=com.docker.stack.namespace=carapp"
   has "deploy.prod pulls the prod compose" "docker compose -f docker-compose-prod.yml pull"
   hasnt "deploy.prod never removes the stack" "stack rm"
@@ -122,9 +129,10 @@ check "deploy.recover defaults" carapp 0 -n deploy.recover && {
 check "rollback defaults" carapp 0 -n rollback && {
   order "rollback sequence" \
     "castor barlito:castor:migrations-rollback-target v1.2.0 --dir=migrations --namespace=DoctrineMigrations" \
-    "-f /backups/carapp-pre-rollback-" \
+    "Will restore" \
+    "pg_dump -U carapp -F c -d carapp" \
     "docker service scale carapp_message_worker=0" \
-    "doctrine:migrations:migrate \"\$version\" --no-interaction" \
+    "doctrine:migrations:execute --down \"\$version\" --no-interaction" \
     "docker service update --image barlito/carapp:v1.2.0 carapp_php" \
     "castor barlito:castor:assert-deployed carapp_php barlito/carapp:v1.2.0" \
     "docker service update --image barlito/carapp-worker:v1.2.0 carapp_message_worker" \
@@ -136,13 +144,21 @@ check "rollback defaults" carapp 0 -n rollback && {
 }
 
 check "rollback RESTORE=1" carapp 0 -n rollback RESTORE=1 && {
-  has "RESTORE restores the latest dump" "pg_restore -U carapp -d carapp --clean --if-exists --no-owner"
-  hasnt "RESTORE replaces the migration revert" "doctrine:migrations:migrate"
+  order "RESTORE resolves the dump before the rollback backup" "Will restore" "pg_dump -U carapp" "db.restore dump_file=/tmp/carapp-rollback-restore"
+  has "RESTORE restores in one transaction" "pg_restore -U carapp -d carapp --single-transaction --no-owner"
+  hasnt "RESTORE replaces the migration revert" "doctrine:migrations:execute"
 }
-check "rollback RESTORE=0 is off" carapp 0 -n rollback RESTORE=0 && has "RESTORE=0 reverts migrations" "doctrine:migrations:migrate"
+check "rollback RESTORE=0 is off" carapp 0 -n rollback RESTORE=0 && has "RESTORE=0 reverts migrations" "doctrine:migrations:execute --down"
 
 TAG="" check "rollback without TAG" carapp fail -n rollback && has "rollback without TAG explains" "TAG is required"
 TAG="" check "assert_image without TAG" carapp fail -n deploy.assert_image && has "assert_image without TAG explains" "TAG is required"
+
+for target in deploy.prod deploy.update rollback; do
+  TAG="" check "$target without TAG" carapp fail -n $target && has "$target without TAG explains" "TAG is required"
+  hasnt "$target without TAG runs nothing first" "pg_dump"
+done
+check "deploy.prod backup is optional only there" carapp 0 -n deploy.prod && has "first deploy may skip the backup" "make db.backup backup_optional=1"
+check "deploy.update backup is mandatory" carapp 0 -n deploy.update && hasnt "no optional backup in update" "backup_optional"
 
 # --- no workers, every parameter overridden
 fixture custom 'stack_name=ytcg
@@ -162,7 +178,8 @@ migrations_dir=db/migrations'
 check "deploy.prod overridden" custom 0 -n deploy.prod && {
   has "overridden stack deploy" "timeout 60 docker stack deploy --detach=false -c compose.prod.yml ytcg"
   has "overridden assert" "castor barlito:castor:assert-deployed ytcg_app barlito/youl-tcg:v1.2.0 --timeout=30 --settle=2"
-  has "overridden backup" "docker ps --filter name='ytcg_pg' -q"
+  has "overridden backup" "docker ps --filter label=com.docker.swarm.service.name=ytcg_pg -q"
+  has "overridden wait-db" "castor barlito:castor:wait-db-container --service=pg --php-service=app"
   has "overridden backup user" "pg_dump -U postgres -F c -d ytcg_db -f /backups/ytcg-\$ts.dump"
   has "overridden smoke path" "https://carapp.barlito.fr/login"
   hasnt "no worker assert without workers" "message_worker"
@@ -204,31 +221,57 @@ fixture override "" 'deploy.prod:
 	echo custom-deploy'
 check "project override" override 0 deploy.prod && has "override wins" "custom-deploy"
 
-# --- db.backup / db.restore with a fake docker
+# --- db.backup / db.restore / rollback steps with a fake docker
 : > "$work/docker.log"
-FAKE_CID="" check "db.backup skipped without db" carapp 0 db.backup && has "backup skipped" "backup skipped"
+FAKE_CID="" check "db.backup without db is an error" carapp fail db.backup && has "backup refusal explained" "refusing to continue without a backup"
+FAKE_CID="" check "db.backup optional without db" carapp 0 db.backup backup_optional=1 && has "backup skipped" "backup skipped"
 grep -q pg_dump "$work/docker.log" && fail "backup must not run without db" || pass "no pg_dump without db"
-FAKE_CID=abc check "db.backup runs" carapp 0 db.backup backup_label=pre-rollback- && has "backup announces file" "carapp-pre-rollback-"
-grep -q 'exec -t abc sh -c pg_dump -U carapp -F c -d carapp -f /backups/carapp-pre-rollback-' "$work/docker.log" && pass "pg_dump executed" || fail "pg_dump not executed: $(cat "$work/docker.log")"
+FAKE_CID=abc check "db.backup runs" carapp 0 db.backup && has "backup announces file" "DB backup -> /srv/carapp/backups/carapp-"
+grep -q 'exec -t abc sh -c pg_dump -U carapp -F c -d carapp -f /backups/carapp-' "$work/docker.log" && pass "pg_dump executed" || fail "pg_dump not executed: $(cat "$work/docker.log")"
+grep -q 'ps --filter label=com.docker.swarm.service.name=carapp_db -q' "$work/docker.log" && pass "container found by exact service label" || fail "label filter not used: $(cat "$work/docker.log")"
+grep -q 'filter name=' "$work/docker.log" && fail "name filter used" || pass "no substring name filter"
 
 : > "$work/docker.log"
 FAKE_CID=abc FAKE_LATEST=/backups/carapp-20260101-120000.dump check "db.restore latest" carapp 0 db.restore dump=1 && has "restores latest" "carapp-20260101-120000.dump"
-grep -q 'pg_restore -U carapp -d carapp --clean --if-exists --no-owner /backups/carapp-20260101-120000.dump' "$work/docker.log" && pass "pg_restore executed" || fail "pg_restore not executed: $(cat "$work/docker.log")"
+grep -q 'exec -t abc psql -U carapp -d carapp -v ON_ERROR_STOP=1 -c DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public AUTHORIZATION carapp;' "$work/docker.log" && pass "schema dropped and recreated" || fail "schema reset missing: $(cat "$work/docker.log")"
+grep -q 'pg_restore -U carapp -d carapp --single-transaction --no-owner /backups/carapp-20260101-120000.dump' "$work/docker.log" && pass "pg_restore executed" || fail "pg_restore not executed: $(cat "$work/docker.log")"
+[ "$(grep -n 'psql' "$work/docker.log" | cut -d: -f1)" -lt "$(grep -n 'pg_restore' "$work/docker.log" | cut -d: -f1)" ] && pass "schema reset precedes restore" || fail "restore order"
+: > "$work/docker.log"
+FAKE_CID=abc check "db.restore several schemas" carapp 0 db.restore dump=x.dump db_schemas="public audit" && grep -q 'DROP SCHEMA IF EXISTS audit CASCADE; CREATE SCHEMA audit AUTHORIZATION carapp;' "$work/docker.log" && pass "every schema reset" || fail "schemas: $(cat "$work/docker.log")"
 : > "$work/docker.log"
 FAKE_CID=abc check "db.restore named dump" carapp 0 db.restore dump=carapp-x.dump && grep -q '/backups/carapp-x.dump' "$work/docker.log" && pass "named dump restored" || fail "named dump"
+FAKE_CID=abc FAKE_MISSING=1 check "db.restore missing dump" carapp fail db.restore dump=carapp-x.dump && has "missing dump explained" "not found in"
+: > "$work/docker.log"
+FAKE_CID=abc FAKE_MISSING=1 check "failed restore resets nothing" carapp fail db.restore dump=carapp-x.dump
+grep -q psql "$work/docker.log" && fail "schema dropped although the dump is missing" || pass "no schema reset when the dump is missing"
 FAKE_CID=abc FAKE_LATEST="" check "db.restore without dump" carapp fail db.restore dump=latest && has "no dump explained" "No dump to restore"
 FAKE_CID=abc check "db.restore path rejected" carapp fail db.restore dump=../etc/x && has "path explained" "not a path"
 FAKE_CID="" check "db.restore without db" carapp fail db.restore dump=1 && has "no db explained" "DB container not found"
 
-# --- rollback.migrations reads the version from the castor output file
+# --- rollback.resolve picks the dump before the rollback backup exists
+state="$work/state"
+FAKE_CID=abc FAKE_LATEST=/backups/carapp-20260101-120000.dump RESTORE=1 check "rollback.resolve" carapp 0 rollback.resolve rollback_state="$state" && [ "$(cat "$state")" = "carapp-20260101-120000.dump" ] && pass "resolved dump recorded" || fail "state: $(cat "$state" 2>&1)"
+FAKE_CID=abc RESTORE=my.dump check "rollback.resolve named" carapp 0 rollback.resolve rollback_state="$state" && [ "$(cat "$state")" = "my.dump" ] && pass "named dump recorded" || fail "named state"
+FAKE_CID=abc RESTORE=0 check "rollback.resolve off" carapp 0 rollback.resolve rollback_state="$state"
+[ -e "$state" ] && fail "state left when RESTORE=0" || pass "no state without RESTORE"
+FAKE_CID=abc FAKE_MISSING=1 RESTORE=my.dump check "rollback.resolve missing dump" carapp fail rollback.resolve rollback_state="$state" && has "missing dump stops before any change" "not found in"
+FAKE_CID="" RESTORE=1 check "rollback.resolve without db" carapp fail rollback.resolve rollback_state="$state"
 : > "$work/docker.log"
-FAKE_VERSION='DoctrineMigrations\Version2' check "rollback.migrations reverts" carapp 0 rollback.migrations TAG=v1 && hasnt "revert ignores castor noise" "No migration to revert"
-grep -qF 'exec -t APPCID bin/console doctrine:migrations:migrate DoctrineMigrations\Version2 --no-interaction' "$work/docker.log" && pass "migrations reverted to the detected version" || fail "revert not executed: $(cat "$work/docker.log")"
+echo "carapp-20250505-000000.dump" > "$work/restore-name"
+FAKE_CID=abc check "db.restore from state file" carapp 0 db.restore dump_file="$work/restore-name" && grep -q '/backups/carapp-20250505-000000.dump' "$work/docker.log" && pass "dump read from the state file" || fail "dump_file: $(cat "$work/docker.log")"
+
+# --- rollback.migrations reverts the listed migrations, newest first
+: > "$work/docker.log"
+FAKE_VERSION=$'DoctrineMigrations\\Version2\nDoctrineMigrations\\Version1\n' check "rollback.migrations reverts" carapp 0 rollback.migrations TAG=v1 && hasnt "revert ignores castor noise" "No migration to revert"
+[ "$(grep -c 'migrations:execute --down' "$work/docker.log")" = 2 ] && pass "one execute per migration" || fail "executes: $(cat "$work/docker.log")"
+[ "$(grep -n 'Version2' "$work/docker.log" | cut -d: -f1)" -lt "$(grep -n 'Version1' "$work/docker.log" | cut -d: -f1)" ] && pass "newest reverted first" || fail "revert order"
+grep -qF 'exec -t APPCID bin/console doctrine:migrations:execute --down DoctrineMigrations\Version2 --no-interaction' "$work/docker.log" && pass "execute --down used" || fail "execute: $(cat "$work/docker.log")"
 : > "$work/docker.log"
 FAKE_VERSION='' check "rollback.migrations without revert" carapp 0 rollback.migrations TAG=v1 && has "nothing to revert" "No migration to revert"
 [ -s "$work/docker.log" ] && fail "docker called without migration to revert" || pass "no docker call without migration to revert"
 
-grep -q 'stack rm' "$work/docker.log" && fail "stack rm called"
+# cumulative logs, never truncated
+grep -q 'stack rm' "$work/docker.all.log" "$ALL_OUT" && fail "stack rm found in a log" || pass "stack rm never issued"
 
 if [ "$failures" -gt 0 ]; then echo "$failures failure(s)"; exit 1; fi
 echo "all make tests passed"
