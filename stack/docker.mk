@@ -27,7 +27,7 @@ docker.deploy.ci:
 # Waits for convergence; on timeout deploy.assert_image reports the failing service
 docker.deploy.prod:
 	docker compose -f $(prod_compose_file) pull
-	@timeout $(deploy_timeout) docker stack deploy --detach=false -c $(prod_compose_file) $(stack_name) \
+	@timeout $(deploy_timeout) docker stack deploy --detach=false --with-registry-auth -c $(prod_compose_file) $(if $(prod_compose_override),-c $(prod_compose_override) )$(stack_name) \
 		|| { rc=$$?; [ $$rc -eq 124 ] && echo "$(stack_name) not converged after $(deploy_timeout)s"; [ $$rc -eq 124 ]; }
 
 docker.service.update:
