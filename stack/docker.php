@@ -10,14 +10,28 @@ use function Castor\context;
 use function Castor\io;
 use function Castor\run;
 
-function runningContainerId(string $name): string
+function firstRunningContainerId(string ...$filters): string
 {
-    $ids = trim(capture(
-        ['docker', 'ps', '-q', '--filter', "label=com.docker.swarm.service.name={$name}", '--filter', 'status=running'],
-        context: context()->withAllowFailure(),
-    ));
+    $args = ['docker', 'ps', '-q', '--filter', 'status=running'];
+    foreach ($filters as $filter) {
+        array_push($args, '--filter', $filter);
+    }
+    $ids = trim(capture($args, context: context()->withAllowFailure()->withQuiet()));
 
     return '' === $ids ? '' : strtok($ids, "\n");
+}
+
+// Swarm service first, then a compose service of the project (CI stacks run with `docker compose up`), then the exact container name
+function runningContainerId(string $stack, string $service): string
+{
+    return firstRunningContainerId("label=com.docker.swarm.service.name={$stack}_{$service}")
+        ?: firstRunningContainerId("label=com.docker.compose.project={$stack}", "label=com.docker.compose.service={$service}")
+        ?: firstRunningContainerId('name=^/' . preg_quote("{$stack}_{$service}", '/') . '$');
+}
+
+function stackName(string $stack): string
+{
+    return '' !== $stack ? $stack : context()->environment['STACK_NAME'];
 }
 
 function containerHealth(string $id): string
@@ -28,10 +42,10 @@ function containerHealth(string $id): string
     ));
 }
 
-function waitForReadyContainer(string $name, int $maxAttempts = 90, int $intervalSeconds = 2): string
+function waitForReadyContainer(string $stack, string $service, int $maxAttempts = 90, int $intervalSeconds = 2): string
 {
     for ($attempt = 1; $attempt <= $maxAttempts; ++$attempt) {
-        $id = runningContainerId($name);
+        $id = runningContainerId($stack, $service);
         if ('' !== $id && \in_array(containerHealth($id), ['healthy', 'none'], true)) {
             return $id;
         }
@@ -39,6 +53,7 @@ function waitForReadyContainer(string $name, int $maxAttempts = 90, int $interva
         sleep($intervalSeconds);
     }
 
+    $name = "{$stack}_{$service}";
     io()->error("Container {$name} is not ready after {$maxAttempts} retries.");
 
     throw new \RuntimeException("Container {$name} is not ready after {$maxAttempts} attempts.");
@@ -48,12 +63,13 @@ function waitForReadyContainer(string $name, int $maxAttempts = 90, int $interva
 function waitPhpContainer(
     #[AsOption(description: 'Swarm service of the app, without the stack prefix')]
     string $service = 'php',
+    #[AsOption(description: 'Stack name; defaults to STACK_NAME of the castor context')]
+    string $stack = '',
 ): void {
-    $STACK_NAME = context()->environment['STACK_NAME'];
-    $containerName = "{$STACK_NAME}_{$service}";
+    $stack = stackName($stack);
 
-    io()->info("Waiting for container {$containerName} to start...");
-    waitForReadyContainer($containerName);
+    io()->info("Waiting for container {$stack}_{$service} to start...");
+    waitForReadyContainer($stack, $service);
     io()->success("PHP container is running!");
 }
 
@@ -65,16 +81,16 @@ function waitDbContainer(
     string $phpService = 'php',
     #[AsOption(description: 'Database port')]
     int $port = 5432,
+    #[AsOption(description: 'Stack name; defaults to STACK_NAME of the castor context')]
+    string $stack = '',
 ): void {
-    $STACK_NAME = context()->environment['STACK_NAME'];
-    $dbContainer = "{$STACK_NAME}_{$service}";
-    $phpContainer = "{$STACK_NAME}_{$phpService}";
+    $stack = stackName($stack);
 
-    io()->info("Waiting for database container {$dbContainer} to be ready...");
-    waitForReadyContainer($dbContainer);
+    io()->info("Waiting for database container {$stack}_{$service} to be ready...");
+    waitForReadyContainer($stack, $service);
     io()->success("Database container is ready!");
 
-    $phpContainerId = runningContainerId($phpContainer);
+    $phpContainerId = runningContainerId($stack, $phpService);
     if ($phpContainerId === '') {
         io()->warning("PHP container not found, skipping DNS connectivity check.");
         return;
