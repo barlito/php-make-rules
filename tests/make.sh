@@ -16,6 +16,7 @@ case "$1" in
   exec) case "$*" in
     *"ls -1t"*) echo "$FAKE_LATEST" ;;
     *"test -f"*) [ -z "$FAKE_MISSING" ] ;;
+    *doctrine_migration_versions*) [ -z "$FAKE_NOTABLE" ] && printf '%s\n' "$FAKE_APPLIED" ;;
   esac ;;
 esac
 SHIM
@@ -260,12 +261,25 @@ FAKE_CID="" RESTORE=1 check "rollback.resolve without db" carapp fail rollback.r
 echo "carapp-20250505-000000.dump" > "$work/restore-name"
 FAKE_CID=abc check "db.restore from state file" carapp 0 db.restore dump_file="$work/restore-name" && grep -q '/backups/carapp-20250505-000000.dump' "$work/docker.log" && pass "dump read from the state file" || fail "dump_file: $(cat "$work/docker.log")"
 
-# --- rollback.migrations reverts the listed migrations, newest first
+# --- rollback.migrations reverts only the recorded migrations, newest first
 : > "$work/docker.log"
-FAKE_VERSION=$'DoctrineMigrations\\Version2\nDoctrineMigrations\\Version1\n' check "rollback.migrations reverts" carapp 0 rollback.migrations TAG=v1 && hasnt "revert ignores castor noise" "No migration to revert"
-[ "$(grep -c 'migrations:execute --down' "$work/docker.log")" = 2 ] && pass "one execute per migration" || fail "executes: $(cat "$work/docker.log")"
-[ "$(grep -n 'Version2' "$work/docker.log" | cut -d: -f1)" -lt "$(grep -n 'Version1' "$work/docker.log" | cut -d: -f1)" ] && pass "newest reverted first" || fail "revert order"
+V1='DoctrineMigrations\Version1'; V2='DoctrineMigrations\Version2'
+FAKE_CID=abc FAKE_APPLIED="$V1"$'\n'"$V2" FAKE_VERSION="$V2"$'\n'"$V1"$'\n' check "rollback.migrations reverts" carapp 0 rollback.migrations TAG=v1 && hasnt "revert ignores castor noise" "No migration to revert"
+[ "$(grep -c 'migrations:execute --down' "$work/docker.log")" = 2 ] && pass "one execute per recorded migration" || fail "executes: $(cat "$work/docker.log")"
+[ "$(grep -n 'Version2 --no' "$work/docker.log" | cut -d: -f1)" -lt "$(grep -n 'Version1 --no' "$work/docker.log" | cut -d: -f1)" ] && pass "newest reverted first" || fail "revert order"
 grep -qF 'exec -t APPCID bin/console doctrine:migrations:execute --down DoctrineMigrations\Version2 --no-interaction' "$work/docker.log" && pass "execute --down used" || fail "execute: $(cat "$work/docker.log")"
+grep -q 'psql -U carapp -d carapp -tA -c SELECT version FROM doctrine_migration_versions' "$work/docker.log" && pass "applied versions read from the db" || fail "no applied query: $(cat "$work/docker.log")"
+
+: > "$work/docker.log"
+FAKE_CID=abc FAKE_APPLIED="$V1" FAKE_VERSION="$V2"$'\n'"$V1"$'\n' check "rollback.migrations skips unapplied" carapp 0 rollback.migrations TAG=v1 && has "unapplied announced" "Skipping $V2: not applied"
+[ "$(grep -c 'migrations:execute --down' "$work/docker.log")" = 1 ] && grep -q 'execute --down DoctrineMigrations\\Version1 ' "$work/docker.log" && pass "only the recorded migration reverted" || fail "unapplied reverted: $(cat "$work/docker.log")"
+
+: > "$work/docker.log"
+FAKE_CID=abc FAKE_NOTABLE=1 FAKE_VERSION="$V1"$'\n' check "rollback.migrations without versions table" carapp fail rollback.migrations TAG=v1 && has "missing table explained" "doctrine_migration_versions (table missing?)"
+grep -q 'migrations:execute' "$work/docker.log" && fail "reverted without the versions table" || pass "nothing reverted without the versions table"
+FAKE_CID="" FAKE_VERSION="$V1"$'\n' check "rollback.migrations without db container" carapp fail rollback.migrations TAG=v1 && has "no db explained" "DB container not found"
+check "rollback.migrations db_kind" mysql fail rollback.migrations TAG=v1 && has "db_kind explained" "not supported"
+
 : > "$work/docker.log"
 FAKE_VERSION='' check "rollback.migrations without revert" carapp 0 rollback.migrations TAG=v1 && has "nothing to revert" "No migration to revert"
 [ -s "$work/docker.log" ] && fail "docker called without migration to revert" || pass "no docker call without migration to revert"

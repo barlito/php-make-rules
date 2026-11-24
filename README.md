@@ -80,7 +80,7 @@ import('make/castor_entrypoint.php');
 |------|-------------|
 | `deploy.prod` | Full rolling `docker stack deploy` of the prod compose file (creates the stack on a first deploy, never `stack rm`): backup, deploy, assert images, wait db, migrate, smoke, prune |
 | `deploy.update` | Rolling image update (`TAG`): backup, drain workers, update main service, assert, migrate, update workers, smoke, prune |
-| `rollback` | `TAG=<tag>` required. Backup (mandatory), then reverts exactly the Doctrine migrations added since the tag (`migrations:execute --down`, newest first), then rolls the images back. `RESTORE=1\|<dump file>` restores a dump (resolved before the rollback backup) instead of reverting migrations |
+| `rollback` | `TAG=<tag>` required. Backup (mandatory), then reverts the Doctrine migrations added since the tag that are recorded in `doctrine_migration_versions` (`migrations:execute --down`, newest first; unrecorded ones are skipped), then rolls the images back. `RESTORE=1\|<dump file>` restores a dump (resolved before the rollback backup) instead of reverting migrations |
 | `deploy.recover` | Rescale the workers to their replicas after a failed deploy |
 | `db.backup` | `pg_dump` into `/backups` of the db container; fails when the db container is missing, except with `backup_optional=1` (set by `deploy.prod` for a first deploy) |
 | `db.restore` | `dump=<file>` or `dump=1` (newest backup): drops and recreates `db_schemas`, then `pg_restore --single-transaction` |

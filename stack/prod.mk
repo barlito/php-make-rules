@@ -119,15 +119,24 @@ rollback.resolve:
 rollback.database:
 	$(if $(filter-out 0 false,$(RESTORE)),$(MAKE) db.restore dump_file=$(rollback_state),$(MAKE) rollback.migrations)
 
-# Runs in the current (newer) php container, which holds the down() code; reverts exactly the added migrations, newest first
+# Runs in the current (newer) php container, which holds the down() code; reverts the added migrations recorded as applied, newest first
 rollback.migrations:
+	$(require_postgres)
 	@out="$$(mktemp)"; trap 'rm -f "$$out"' EXIT; \
 	castor barlito:castor:migrations-rollback-target $(TAG) --dir=$(migrations_dir) --namespace=$(migrations_namespace) --output="$$out" || exit 1; \
 	if [ ! -s "$$out" ]; then \
 		echo "No migration to revert"; \
 	else \
+		$(db_cid); \
+		[ -n "$$cid" ] || { echo "DB container not found, cannot read the applied migrations"; exit 1; }; \
+		applied="$$(docker exec "$$cid" psql -U $(db_user) -d $(db_name) -tA -c 'SELECT version FROM doctrine_migration_versions')" \
+			|| { echo "Cannot read doctrine_migration_versions (table missing?)"; exit 1; }; \
 		while IFS= read -r version || [ -n "$$version" ]; do \
-			docker exec -t $(app_container_id) bin/console doctrine:migrations:execute --down "$$version" --no-interaction || exit 1; \
+			if printf '%s\n' "$$applied" | grep -Fxq -- "$$version"; then \
+				docker exec -t $(app_container_id) bin/console doctrine:migrations:execute --down "$$version" --no-interaction || exit 1; \
+			else \
+				echo "Skipping $$version: not applied"; \
+			fi; \
 		done < "$$out"; \
 	fi
 
