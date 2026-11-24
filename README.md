@@ -80,10 +80,10 @@ import('make/castor_entrypoint.php');
 |------|-------------|
 | `deploy.prod` | Full rolling `docker stack deploy` of the prod compose file (creates the stack on a first deploy, never `stack rm`): backup, deploy, assert images, wait db, migrate, smoke, prune |
 | `deploy.update` | Rolling image update (`TAG`): backup, drain workers, update main service, assert, migrate, update workers, smoke, prune |
-| `rollback` | `TAG=<tag>` required. Reverts the Doctrine migrations added since the tag (backup first), then rolls the images back. `RESTORE=1\|<dump file>` restores the DB dump instead of reverting migrations |
+| `rollback` | `TAG=<tag>` required. Backup (mandatory), then reverts exactly the Doctrine migrations added since the tag (`migrations:execute --down`, newest first), then rolls the images back. `RESTORE=1\|<dump file>` restores a dump (resolved before the rollback backup) instead of reverting migrations |
 | `deploy.recover` | Rescale the workers to their replicas after a failed deploy |
-| `db.backup` | `pg_dump` into `/backups` of the db container (skipped when the db is not running) |
-| `db.restore` | `dump=<file>` or `dump=1` (newest deploy backup) with `pg_restore --clean` |
+| `db.backup` | `pg_dump` into `/backups` of the db container; fails when the db container is missing, except with `backup_optional=1` (set by `deploy.prod` for a first deploy) |
+| `db.restore` | `dump=<file>` or `dump=1` (newest backup): drops and recreates `db_schemas`, then `pg_restore --single-transaction` |
 | `deploy.assert_image` | Fail unless `assert_service` runs `assert_image:$TAG`, healthy |
 | `smoke.test` | `curl` GET `https://$(prod_host)$(smoke_path)`, fails on 4xx/5xx |
 | `deploy.prune` | Remove the stack's stopped containers |
@@ -105,7 +105,9 @@ Set `stack_name`, `prod_host`, `image_name` (and `worker_image_name` when there 
 | `db_kind` | `postgres` | Anything else fails in `db.backup` / `db.restore` |
 | `db_service` | `db` | Database service, without the stack prefix |
 | `db_user` / `db_name` | `stack_name` | Credentials used by `pg_dump` / `pg_restore` |
+| `db_schemas` | `public` | Space-separated schemas dropped and recreated before a restore |
 | `backup_path` | `/srv/$(stack_name)/backups` | Host directory mounted on `/backups` (display only) |
+| `backup_optional` | empty | Non-empty lets `db.backup` skip when no db container exists |
 | `smoke_path` | `/` | Path requested by `smoke.test` |
 | `migrations_dir` / `migrations_namespace` | `migrations` / `DoctrineMigrations` | Used by the rollback migration detection |
 
@@ -115,10 +117,10 @@ Set `stack_name`, `prod_host`, `image_name` (and `worker_image_name` when there 
 
 | Task | Description |
 |------|-------------|
-| `wait-php-container` | Wait for PHP container to be running and healthy (3 min timeout) |
-| `wait-db-container` | Wait for DB container to be healthy and reachable from PHP (3 min timeout) |
+| `wait-php-container [--service=php]` | Wait for PHP container to be running and healthy (3 min timeout) |
+| `wait-db-container [--service=db] [--php-service=php] [--port=5432]` | Wait for DB container to be healthy and reachable from PHP (3 min timeout) |
 | `assert-deployed <service> <image> [--timeout=180] [--settle=10]` | Fail unless the Swarm service runs `<image>` with every replica running, healthy and still the same tasks after `--settle` seconds. Run it after `docker service update` / `docker stack deploy`, which exit 0 even when Swarm rolled the update back |
-| `migrations-rollback-target <tag> [--dir] [--namespace] [--output]` | Write the Doctrine version to migrate to when rolling back to `<tag>` (empty when no migration was added since, `first` when the tag has none); fail on an unknown tag |
+| `migrations-rollback-target <tag> [--dir] [--namespace] [--output]` | Write, one per line and newest first, the migrations present in the working tree but not in `<tag>` (empty when none); fail on an unknown tag |
 | `set-stack-name` | Replace stack name placeholder in project files |
 
 ## Overridable Variables

@@ -32,25 +32,23 @@ function migrationVersions(array $files): array
 }
 
 /**
- * Doctrine target to migrate to for the schema of the target tag, '' when the tag already has every current migration.
+ * Fully qualified names of the migrations to revert, newest first: exactly those missing from the target tag.
  *
  * @param list<string> $current migration versions of the working tree
  * @param list<string> $target  migration versions of the target tag
+ *
+ * @return list<string>
  */
-function migrationRollbackVersion(array $current, array $target, string $namespace): string
+function migrationsToRevert(array $current, array $target, string $namespace): array
 {
-    if ([] === array_diff($current, $target)) {
-        return '';
-    }
-    if ([] === $target) {
-        return 'first';
-    }
+    $added = array_values(array_diff($current, $target));
+    rsort($added);
 
-    return $namespace . '\\' . end($target);
+    return array_map(static fn (string $version): string => $namespace . '\\' . $version, $added);
 }
 
-// The version goes to --output: a file keeps it clear of castor's own log lines on stdout
-#[AsTask('migrations-rollback-target', description: 'Print the Doctrine version to revert to when rolling back to a tag (empty if no migration is crossed)')]
+// The migrations go to --output: a file keeps it clear of castor's own log lines on stdout
+#[AsTask('migrations-rollback-target', description: 'List the Doctrine migrations to revert when rolling back to a tag, newest first (empty if none)')]
 function migrationsRollbackTarget(
     #[AsArgument(description: 'Git tag or revision to roll back to, e.g. v1.2.0')]
     string $tag,
@@ -58,7 +56,7 @@ function migrationsRollbackTarget(
     string $dir = 'migrations',
     #[AsOption(description: 'Migrations namespace')]
     string $namespace = 'DoctrineMigrations',
-    #[AsOption(description: 'File receiving the version, left empty when no migration has to be reverted')]
+    #[AsOption(description: 'File receiving one migration per line, left empty when none has to be reverted')]
     string $output = 'php://stdout',
 ): void {
     $quiet = context()->withQuiet();
@@ -74,12 +72,13 @@ function migrationsRollbackTarget(
         ['git', 'ls-tree', '-r', '--name-only', $tag, '--', rtrim($dir, '/') . '/'],
         context: $quiet,
     ))));
-    $current = migrationVersions(glob(rtrim($dir, '/') . '/Version*.php') ?: []);
+    $current = migrationVersions(glob(rtrim(context()->workingDirectory, '/') . '/' . rtrim($dir, '/') . '/Version*.php') ?: []);
 
     $added = array_diff($current, $target);
     if ([] !== $added) {
         fwrite(\STDERR, "Migrations added since {$tag}: " . implode(', ', $added) . "\n");
     }
 
-    file_put_contents($output, migrationRollbackVersion($current, $target, $namespace));
+    $revert = migrationsToRevert($current, $target, $namespace);
+    file_put_contents($output, [] === $revert ? '' : implode("\n", $revert) . "\n");
 }
