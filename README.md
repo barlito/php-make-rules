@@ -80,10 +80,10 @@ import('make/castor_entrypoint.php');
 |------|-------------|
 | `deploy.prod` | Full rolling `docker stack deploy` of the prod compose file (creates the stack on a first deploy, never `stack rm`): backup, deploy, assert images, wait db, migrate, smoke, prune |
 | `deploy.update` | Rolling image update (`TAG`): backup, drain workers, update main service, assert, migrate, update workers, smoke, prune |
-| `rollback` | `TAG=<tag>` required. Backup (mandatory), then reverts the Doctrine migrations added since the tag that are recorded in `doctrine_migration_versions` (`migrations:execute --down`, newest first; unrecorded ones are skipped), then rolls the images back. `RESTORE=1\|<dump file>` restores a dump (resolved before the rollback backup) instead of reverting migrations |
+| `rollback` | `TAG=<tag>` required. Backup (mandatory), then reverts the Doctrine migrations added since the tag that are recorded in `doctrine_migration_versions` (`migrations:execute --down`, newest first; unrecorded ones are skipped), then rolls the images back. `RESTORE=1\|<dump file>` restores a dump instead of reverting migrations: `RESTORE=1` takes the newest dump taken while `TAG` was the running version (`<stack>-<TAG>-<ts>.dump`) and fails when there is none; the rollback's own safety backup is `<stack>_rollback-<ts>.dump` and is never selected. `castor` must be in the PATH |
 | `deploy.recover` | Rescale the workers to their replicas after a failed deploy |
-| `db.backup` | `pg_dump` into `/backups` of the db container; fails when the db container is missing, except with `backup_optional=1` (set by `deploy.prod` for a first deploy) |
-| `db.restore` | `dump=<file>` or `dump=1` (newest backup): drops and recreates `db_schemas`, then `pg_restore --single-transaction` |
+| `db.backup` | `pg_dump` into `/backups` of the db container, named `<stack>-<running version>-<ts>.dump` (version = tag of the main service image; `<stack>_unversioned-<ts>.dump` when unknown); fails when the db container is missing, except with `backup_optional=1` (set by `deploy.prod` for a first deploy) |
+| `db.restore` | `dump=<file>` or `dump=1` (newest backup): drops and recreates `db_schemas`, then restores, all in one transaction (a corrupt dump or a failing restore leaves the database untouched); `dump=1` takes the newest backup of any kind |
 | `deploy.assert_image` | Fail unless `assert_service` runs `assert_image:$TAG`, healthy |
 | `smoke.test` | `curl` GET `https://$(prod_host)$(smoke_path)`, fails on 4xx/5xx |
 | `deploy.prune` | Remove the stack's stopped containers |

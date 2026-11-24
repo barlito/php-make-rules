@@ -18,6 +18,7 @@ db_name ?= $(stack_name)
 db_schemas ?= public
 backup_path ?= /srv/$(stack_name)/backups
 backup_optional ?=
+backup_label ?=
 rollback_state ?= /tmp/$(stack_name)-rollback-restore
 smoke_path ?= /
 migrations_dir ?= migrations
@@ -37,16 +38,37 @@ require_postgres = $(if $(filter postgres,$(db_kind)),,$(error db_kind '$(db_kin
 # Exact match on the swarm service label: a name filter would match substrings
 db_cid = cid="$$(docker ps --filter label=com.docker.swarm.service.name=$(stack_name)_$(db_service) -q | head -1)"
 
-# Resolves $$dump (1|true|latest, or a file name) against $(backup_path); needs $$cid and $$dump
+require_castor = command -v castor >/dev/null 2>&1 || { echo "castor not found in PATH: install it before running this target (nothing was changed)"; exit 1; }
+
+ts_glob = [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]
+
+# Running version = tag of the main service image; empty when unknown or not a file-name-safe tag
+running_version = img="$$(docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' $(stack_name)_$(main_service) 2>/dev/null)"; \
+	img="$${img%%@*}"; version=""; \
+	case "$$img" in *:*) version="$${img\#\#*:}";; esac; \
+	case "$$version" in *[!A-Za-z0-9._-]*) version="";; esac
+
+# Local lookup by exact service label: several replicas give several IDs
+app_cid = acid="$$(docker ps -q --filter label=com.docker.swarm.service.name=$(stack_name)_$(main_service) | head -n1)"
+
+# Runs in the db container: $$1 dump name, $$2 schema reset SQL; a corrupt dump aborts before anything is dropped
+restore_script = f=$$(mktemp) || exit 1; \
+	if pg_restore -f "$$f" --no-owner "/backups/$$1"; then \
+		{ printf "%s\n" "$$2"; cat "$$f"; } | psql -U $(db_user) -d $(db_name) -v ON_ERROR_STOP=1 --single-transaction -f -; rc=$$?; \
+	else rc=1; fi; \
+	rm -f "$$f"; exit $$rc
+
+# Resolves $$dump (1|true|latest, or a file name) against $(backup_path); needs $$cid, $$dump and $$glob (file pattern used for latest)
 find_dump = case "$$dump" in \
-	1|true|latest) dump="$$(docker exec "$$cid" sh -c 'ls -1t /backups/$(stack_name)-[0-9]*.dump 2>/dev/null | head -1' | xargs -r basename)";; \
+	1|true|latest) dump="$$(docker exec "$$cid" sh -c "ls -1t /backups/$$glob 2>/dev/null | head -1" | xargs -r basename)";; \
 	*/*) echo "dump must be a file name, not a path"; exit 1;; \
 esac; \
-[ -n "$$dump" ] || { echo "No dump to restore in $(backup_path)"; exit 1; }; \
+[ -n "$$dump" ] || { echo "No dump to restore in $(backup_path) (pattern $$glob)"; exit 1; }; \
 docker exec "$$cid" test -f "/backups/$$dump" || { echo "Dump $$dump not found in $(backup_path)"; exit 1; }
 
 deploy.prod:
 	$(require_tag)
+	@$(require_castor)
 	$(MAKE) db.backup backup_optional=1
 	$(MAKE) docker.deploy.prod
 	$(MAKE) deploy.assert_image
@@ -58,6 +80,7 @@ deploy.prod:
 
 deploy.update:
 	$(require_tag)
+	@$(require_castor)
 	$(MAKE) db.backup
 	$(MAKE) deploy.workers.drain
 	$(MAKE) docker.service.update args="--image $(image_name):$(TAG) $(stack_name)_$(main_service)"
@@ -89,9 +112,10 @@ deploy.worker.update:
 # TAG=<tag> required; RESTORE=1|<dump file> restores the DB instead of reverting migrations
 rollback:
 	$(require_tag)
+	@$(require_castor)
 	$(MAKE) rollback.check
 	$(MAKE) rollback.resolve
-	$(MAKE) db.backup
+	$(MAKE) db.backup backup_label=rollback
 	$(MAKE) deploy.workers.drain
 	$(MAKE) rollback.database
 	$(MAKE) docker.service.update args="--image $(image_name):$(TAG) $(stack_name)_$(main_service)"
@@ -105,13 +129,17 @@ rollback.check:
 	$(require_tag)
 	castor barlito:castor:migrations-rollback-target $(TAG) --dir=$(migrations_dir) --namespace=$(migrations_namespace)
 
-# Picks the dump before the rollback backup exists, so the backup can never be selected
+# RESTORE=1 selects the newest dump taken while $(TAG) was the running version; the rollback backup has another name and is never selected
 rollback.resolve:
 	@rm -f "$(rollback_state)"; \
 	case "$(RESTORE)" in ""|0|false) exit 0;; esac; \
 	$(db_cid); \
 	[ -n "$$cid" ] || { echo "DB container not found, cannot restore"; exit 1; }; \
 	dump="$(RESTORE)"; \
+	case "$$dump" in 1|true|latest) \
+		case "$(TAG)" in *[!A-Za-z0-9._-]*) echo "TAG '$(TAG)' has characters not allowed in a dump name"; exit 1;; esac; \
+		glob="$(stack_name)-$(TAG)-$(ts_glob).dump";; \
+	esac; \
 	$(find_dump); \
 	echo "$$dump" > "$(rollback_state)"; \
 	echo "Will restore $$dump"
@@ -129,11 +157,13 @@ rollback.migrations:
 	else \
 		$(db_cid); \
 		[ -n "$$cid" ] || { echo "DB container not found, cannot read the applied migrations"; exit 1; }; \
+		$(app_cid); \
+		[ -n "$$acid" ] || { echo "Container of $(stack_name)_$(main_service) not found, cannot revert the migrations"; exit 1; }; \
 		applied="$$(docker exec "$$cid" psql -U $(db_user) -d $(db_name) -tA -c 'SELECT version FROM doctrine_migration_versions')" \
 			|| { echo "Cannot read doctrine_migration_versions (table missing?)"; exit 1; }; \
 		while IFS= read -r version || [ -n "$$version" ]; do \
 			if printf '%s\n' "$$applied" | grep -Fxq -- "$$version"; then \
-				docker exec -t $(app_container_id) bin/console doctrine:migrations:execute --down "$$version" --no-interaction || exit 1; \
+				docker exec -t "$$acid" bin/console doctrine:migrations:execute --down "$$version" --no-interaction || exit 1; \
 			else \
 				echo "Skipping $$version: not applied"; \
 			fi; \
@@ -141,13 +171,19 @@ rollback.migrations:
 	fi
 
 # Custom format (-F c) dump in the host volume $(backup_path), mounted on /backups in the db container; only deploy.prod may skip it (first deploy)
+# Named <stack>-<running version>-<ts>.dump; backup_label=<x> gives <stack>_<x>-<ts>.dump and an unknown version <stack>_unversioned-<ts>.dump (rollback never selects those)
 db.backup:
 	$(require_postgres)
 	@$(db_cid); \
 	if [ -n "$$cid" ]; then \
 		ts="$$(date +%Y%m%d-%H%M%S)"; \
-		echo "DB backup -> $(backup_path)/$(stack_name)-$$ts.dump (container $$cid)"; \
-		docker exec -t "$$cid" sh -c "pg_dump -U $(db_user) -F c -d $(db_name) -f /backups/$(stack_name)-$$ts.dump"; \
+		if [ -n "$(backup_label)" ]; then prefix="$(stack_name)_$(backup_label)"; \
+		else \
+			$(running_version); \
+			if [ -n "$$version" ]; then prefix="$(stack_name)-$$version"; else prefix="$(stack_name)_unversioned"; fi; \
+		fi; \
+		echo "DB backup -> $(backup_path)/$$prefix-$$ts.dump (container $$cid)"; \
+		docker exec -t "$$cid" sh -c "pg_dump -U $(db_user) -F c -d $(db_name) -f /backups/$$prefix-$$ts.dump"; \
 	elif [ -n "$(backup_optional)" ]; then \
 		echo "DB container not found, backup skipped (first deploy?)"; \
 	else \
@@ -155,17 +191,18 @@ db.backup:
 		exit 1; \
 	fi
 
-# dump=<file name in $(backup_path)>, or 1/latest for the newest deploy backup; dump_file=<path> reads the name from a file
+# dump=<file name in $(backup_path)>, or 1/latest for the newest backup of any kind; dump_file=<path> reads the name from a file
+# Schema reset and restore run in one transaction
 db.restore:
 	$(require_postgres)
 	@$(db_cid); \
 	[ -n "$$cid" ] || { echo "DB container not found, cannot restore"; exit 1; }; \
 	dump="$(dump)"; \
 	[ -z "$(dump_file)" ] || dump="$$(cat "$(dump_file)")"; \
+	glob="$(stack_name)[-_]*.dump"; \
 	$(find_dump); \
 	echo "DB restore <- $(backup_path)/$$dump (container $$cid)"; \
-	docker exec -t "$$cid" psql -U $(db_user) -d $(db_name) -v ON_ERROR_STOP=1 -c "$(foreach s,$(db_schemas),DROP SCHEMA IF EXISTS $(s) CASCADE; CREATE SCHEMA $(s) AUTHORIZATION $(db_user);)" \
-	&& docker exec -t "$$cid" pg_restore -U $(db_user) -d $(db_name) --single-transaction --no-owner "/backups/$$dump"
+	docker exec -i "$$cid" sh -c '$(restore_script)' sh "$$dump" "$(foreach s,$(db_schemas),DROP SCHEMA IF EXISTS $(s) CASCADE; CREATE SCHEMA $(s) AUTHORIZATION $(db_user);)" </dev/null
 
 # Swarm rollbacks exit 0: fail unless the service really runs the tag, healthy (castor task)
 deploy.assert_image:
