@@ -13,6 +13,14 @@ const STACK_NAME_FILES = [
     'Makefile',
     'docker-compose.yml',
 ];
+// Present in projects created from php-starter; skipped when missing
+const STACK_NAME_OPTIONAL_FILES = [
+    'docker-compose-ci.yml',
+    'docker-compose-prod.yml',
+    '.github/workflows/release.yaml',
+    '.github/workflows/deploy.yaml',
+    '.github/workflows/rollback.yaml',
+];
 
 
 /**
@@ -23,7 +31,9 @@ function setStackName(
     string $stackName,
 ): void
 {
-    replaceStringInFiles(STACK_NAME_PLACEHOLDER, $stackName, STACK_NAME_FILES);
+    $optionalFiles = array_filter(STACK_NAME_OPTIONAL_FILES, 'file_exists');
+
+    replaceStringInFiles(STACK_NAME_PLACEHOLDER, $stackName, [...STACK_NAME_FILES, ...$optionalFiles]);
 
     io()->success('Stack name has been set.');
 }
