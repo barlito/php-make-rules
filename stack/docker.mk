@@ -24,9 +24,11 @@ docker.deploy.ci:
 	docker compose -p $(stack_name) -f docker-compose.yml -f docker-compose-ci.yml up -d
 
 ### Prod rules
+# Waits for convergence; on timeout deploy.assert_image reports the failing service
 docker.deploy.prod:
-	docker compose -f docker-compose-prod.yml pull
-	docker stack deploy -c docker-compose-prod.yml $(stack_name)
+	docker compose -f $(prod_compose_file) pull
+	@timeout $(deploy_timeout) docker stack deploy --detach=false -c $(prod_compose_file) $(stack_name) \
+		|| { rc=$$?; [ $$rc -eq 124 ] && echo "$(stack_name) not converged after $(deploy_timeout)s"; [ $$rc -eq 124 ]; }
 
 docker.service.update:
 	docker service update $(args)

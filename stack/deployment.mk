@@ -26,13 +26,7 @@ deploy.ci:
 	make doctrine.load_fixtures.ci
 	#make symfony.security_check
 
-### Prod rules
-deploy.prod:
-	make docker.deploy.prod
-	castor barlito:castor:wait-php-container
-	castor barlito:castor:wait-db-container
-	make doctrine.migrate
-
+### Prod rules (deploy.prod, deploy.update, rollback... are in prod.mk)
 update.service:
 	make docker.service.update args="$(service_update_args)"
 	castor barlito:castor:wait-php-container

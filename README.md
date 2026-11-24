@@ -64,7 +64,7 @@ import('make/castor_entrypoint.php');
 |------|-------------|
 | `docker.deploy` | Build + deploy dev stack (Swarm) |
 | `docker.deploy.ci` | Deploy CI stack (compose up) |
-| `docker.deploy.prod` | Deploy production stack |
+| `docker.deploy.prod` | Pull and `docker stack deploy --detach=false` the prod compose file, bounded by `deploy_timeout` |
 | `docker.undeploy` | Remove Swarm stack |
 | `docker.undeploy.ci` | Remove CI containers |
 | `docker.bash` | Shell into PHP container |
@@ -72,8 +72,44 @@ import('make/castor_entrypoint.php');
 | `docker.service.update` | Update a Swarm service |
 | `deploy` | Full dev deploy (build + install + migrate + fixtures) |
 | `deploy.ci` | Full CI deploy |
-| `deploy.prod` | Full prod deploy |
 | `undeploy` | Remove stack |
+
+### Production (`stack/prod.mk`)
+
+| Rule | Description |
+|------|-------------|
+| `deploy.prod` | Full rolling `docker stack deploy` of the prod compose file (creates the stack on a first deploy, never `stack rm`): backup, deploy, assert images, wait db, migrate, smoke, prune |
+| `deploy.update` | Rolling image update (`TAG`): backup, drain workers, update main service, assert, migrate, update workers, smoke, prune |
+| `rollback` | `TAG=<tag>` required. Reverts the Doctrine migrations added since the tag (backup first), then rolls the images back. `RESTORE=1\|<dump file>` restores the DB dump instead of reverting migrations |
+| `deploy.recover` | Rescale the workers to their replicas after a failed deploy |
+| `db.backup` | `pg_dump` into `/backups` of the db container (skipped when the db is not running) |
+| `db.restore` | `dump=<file>` or `dump=1` (newest deploy backup) with `pg_restore --clean` |
+| `deploy.assert_image` | Fail unless `assert_service` runs `assert_image:$TAG`, healthy |
+| `smoke.test` | `curl` GET `https://$(prod_host)$(smoke_path)`, fails on 4xx/5xx |
+| `deploy.prune` | Remove the stack's stopped containers |
+
+Set `stack_name`, `prod_host`, `image_name` (and `worker_image_name` when there are workers) before the include; every target can still be overridden in the project Makefile.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `stack_name` | none | Swarm stack name |
+| `prod_host` | none | Host of the smoke test |
+| `image_name` | none | Main service image (no tag; `TAG` is appended) |
+| `main_service` | `php` | Main service, without the stack prefix |
+| `worker_image_name` | empty | Image of every worker service |
+| `worker_services` | `message_worker:1` if `worker_image_name` is set, else empty | Space-separated `service:replicas` (replicas default to 1), e.g. `message_worker:2 mailer` |
+| `prod_compose_file` | `docker-compose-prod.yml` | Prod compose file |
+| `deploy_timeout` | `300` | Seconds `docker stack deploy` may take |
+| `assert_service` / `assert_image` | `main_service` / `image_name` | Arguments of `deploy.assert_image` (was `assert_image_name` in youl-coin-api) |
+| `assert_timeout` / `assert_settle` | `180` / `10` | Options of the `assert-deployed` task |
+| `db_kind` | `postgres` | Anything else fails in `db.backup` / `db.restore` |
+| `db_service` | `db` | Database service, without the stack prefix |
+| `db_user` / `db_name` | `stack_name` | Credentials used by `pg_dump` / `pg_restore` |
+| `backup_path` | `/srv/$(stack_name)/backups` | Host directory mounted on `/backups` (display only) |
+| `smoke_path` | `/` | Path requested by `smoke.test` |
+| `migrations_dir` / `migrations_namespace` | `migrations` / `DoctrineMigrations` | Used by the rollback migration detection |
+
+`rollback` needs the git history and tags of the target (`fetch-depth: 0`) to compare the migrations of `TAG` with the working tree.
 
 ### Castor Tasks
 
@@ -82,6 +118,7 @@ import('make/castor_entrypoint.php');
 | `wait-php-container` | Wait for PHP container to be running and healthy (3 min timeout) |
 | `wait-db-container` | Wait for DB container to be healthy and reachable from PHP (3 min timeout) |
 | `assert-deployed <service> <image> [--timeout=180] [--settle=10]` | Fail unless the Swarm service runs `<image>` with every replica running, healthy and still the same tasks after `--settle` seconds. Run it after `docker service update` / `docker stack deploy`, which exit 0 even when Swarm rolled the update back |
+| `migrations-rollback-target <tag> [--dir] [--namespace] [--output]` | Write the Doctrine version to migrate to when rolling back to `<tag>` (empty when no migration was added since, `first` when the tag has none); fail on an unknown tag |
 | `set-stack-name` | Replace stack name placeholder in project files |
 
 ## Overridable Variables
@@ -101,3 +138,10 @@ node_image ?= node:22  # Node.js Docker image
 - [barlito/carapp](https://github.com/barlito/carapp)
 - [youl-coin-api](https://github.com/barlito/youl-coin-api)
 - [youl-tcg](https://github.com/barlito/youl-tcg)
+
+## Tests
+
+```bash
+bash tests/make.sh    # make -n assertions, docker shimmed
+bash tests/castor.sh  # castor tasks, in a php container
+```
