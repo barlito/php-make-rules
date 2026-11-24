@@ -26,7 +26,15 @@ cat > "$work/bin/castor" <<'SHIM'
 echo "castor log noise on stdout"
 for arg in "$@"; do case "$arg" in --output=*) printf '%s' "$FAKE_VERSION" > "${arg#--output=}" ;; esac; done
 SHIM
-chmod +x "$work/bin/docker" "$work/bin/castor"
+cat > "$work/bin/curl" <<'SHIM'
+#!/bin/sh
+echo "curl $*" >> "$FAKE_CURL_LOG"
+n=$(cat "$FAKE_CURL_COUNT" 2>/dev/null || echo 0); echo $((n + 1)) > "$FAKE_CURL_COUNT"
+[ "$n" -ge "${FAKE_CURL_FAILS:-0}" ]
+SHIM
+printf '#!/bin/sh\n' > "$work/bin/sleep"
+chmod +x "$work/bin/docker" "$work/bin/castor" "$work/bin/curl" "$work/bin/sleep"
+export FAKE_CURL_LOG="$work/curl.log" FAKE_CURL_COUNT="$work/curl.count"
 # the *_ALL_* logs are never truncated: the final "stack rm" check reads them
 export PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$work/docker.log" FAKE_DOCKER_ALL_LOG="$work/docker.all.log" ALL_OUT="$work/out.all.log"
 : > "$ALL_OUT"
@@ -97,26 +105,31 @@ export TAG=v1.2.0
 check "deploy.prod defaults" carapp 0 -n deploy.prod && {
   order "deploy.prod sequence" \
     "pg_dump -U carapp -F c -d carapp" \
-    "timeout 300 docker stack deploy --detach=false -c docker-compose-prod.yml carapp" \
+    "timeout 300 docker stack deploy --detach=false --with-registry-auth -c docker-compose-prod.yml -c " \
     "castor barlito:castor:assert-deployed carapp_php barlito/carapp:v1.2.0 --timeout=180 --settle=10" \
-    "castor barlito:castor:assert-deployed carapp_message_worker barlito/carapp-worker:v1.2.0 --timeout=180 --settle=10" \
-    "castor barlito:castor:wait-db-container" \
+    "castor barlito:castor:wait-db-container --service=db --php-service=php --stack=carapp" \
     "doctrine:migrations:migrate --no-interaction --allow-no-migration" \
-    "curl -fsS --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 3 -o /dev/null -w \"  HTTP %{http_code}\\n\" https://carapp.barlito.fr/" \
+    "docker service scale carapp_message_worker=1" \
+    "castor barlito:castor:assert-deployed carapp_message_worker barlito/carapp-worker:v1.2.0 --timeout=180 --settle=10" \
+    "curl -fsS --connect-timeout 10 --max-time 30 -o /dev/null -w \"  HTTP %{http_code}\\n\" https://carapp.barlito.fr/" \
     "docker container prune -f --filter label=com.docker.stack.namespace=carapp"
   has "deploy.prod pulls the prod compose" "docker compose -f docker-compose-prod.yml pull"
   hasnt "deploy.prod never removes the stack" "stack rm"
+  has "workers are deployed at 0 replicas" "printf '  %s:\\n    deploy:\\n      replicas: 0\\n' message_worker"
+  has "recover state armed before the stack deploy" "echo unsafe > \"/tmp/carapp-recover-state\""
+  order "recover state armed then cleared once migrated" "echo unsafe >" "doctrine:migrations:migrate" "rm -f \"/tmp/carapp-recover-state\"" "docker service scale carapp_message_worker=1"
+  hasnt "prod deploy no longer uses curl --retry" "--retry"
 }
 
 check "deploy.update defaults" carapp 0 -n deploy.update && {
   order "deploy.update sequence" \
     "pg_dump -U carapp" \
     "docker service scale carapp_message_worker=0" \
-    "docker service update --image barlito/carapp:v1.2.0 carapp_php" \
+    "docker service update --with-registry-auth --image barlito/carapp:v1.2.0 carapp_php" \
     "castor barlito:castor:assert-deployed carapp_php barlito/carapp:v1.2.0" \
-    "castor barlito:castor:wait-php-container" \
+    "castor barlito:castor:wait-php-container --service=php --stack=carapp" \
     "doctrine:migrations:migrate" \
-    "docker service update --image barlito/carapp-worker:v1.2.0 carapp_message_worker" \
+    "docker service update --with-registry-auth --image barlito/carapp-worker:v1.2.0 carapp_message_worker" \
     "docker service scale carapp_message_worker=1" \
     "castor barlito:castor:assert-deployed carapp_message_worker barlito/carapp-worker:v1.2.0" \
     "https://carapp.barlito.fr/" \
@@ -135,10 +148,12 @@ check "rollback defaults" carapp 0 -n rollback && {
     "Will restore" \
     "pg_dump -U carapp -F c -d carapp" \
     "docker service scale carapp_message_worker=0" \
+    "echo unsafe >" \
     "doctrine:migrations:execute --down \"\$version\" --no-interaction" \
-    "docker service update --image barlito/carapp:v1.2.0 carapp_php" \
+    "echo \"v1.2.0\" >" \
+    "docker service update --with-registry-auth --image barlito/carapp:v1.2.0 carapp_php" \
     "castor barlito:castor:assert-deployed carapp_php barlito/carapp:v1.2.0" \
-    "docker service update --image barlito/carapp-worker:v1.2.0 carapp_message_worker" \
+    "docker service update --with-registry-auth --image barlito/carapp-worker:v1.2.0 carapp_message_worker" \
     "docker service scale carapp_message_worker=1" \
     "https://carapp.barlito.fr/" \
     "docker container prune -f"
@@ -181,10 +196,10 @@ assert_timeout=30
 assert_settle=2
 migrations_dir=db/migrations'
 check "deploy.prod overridden" custom 0 -n deploy.prod && {
-  has "overridden stack deploy" "timeout 60 docker stack deploy --detach=false -c compose.prod.yml ytcg"
+  has "overridden stack deploy" "timeout 60 docker stack deploy --detach=false --with-registry-auth -c compose.prod.yml ytcg"
   has "overridden assert" "castor barlito:castor:assert-deployed ytcg_app barlito/youl-tcg:v1.2.0 --timeout=30 --settle=2"
   has "overridden backup" "docker ps --filter label=com.docker.swarm.service.name=ytcg_pg -q"
-  has "overridden wait-db" "castor barlito:castor:wait-db-container --service=pg --php-service=app"
+  has "overridden wait-db" "castor barlito:castor:wait-db-container --service=pg --php-service=app --stack=ytcg"
   has "overridden main service inspected" "docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' ytcg_app"
   has "overridden backup user" "pg_dump -U postgres -F c -d ytcg_db -f /backups/\$prefix-\$ts.dump"
   has "overridden smoke path" "https://carapp.barlito.fr/login"
@@ -192,7 +207,7 @@ check "deploy.prod overridden" custom 0 -n deploy.prod && {
 }
 check "deploy.update without workers" custom 0 -n deploy.update && {
   hasnt "no worker scale without workers" "docker service scale"
-  has "main service update" "docker service update --image barlito/youl-tcg:v1.2.0 ytcg_app"
+  has "main service update" "docker service update --with-registry-auth --image barlito/youl-tcg:v1.2.0 ytcg_app"
 }
 check "deploy.recover without workers" custom 0 -n deploy.recover && hasnt "recover without workers" "docker service"
 check "rollback overridden" custom 0 -n rollback && has "migrations dir forwarded" "--dir=db/migrations"
@@ -211,6 +226,36 @@ check "multi workers recover" workers 0 -n deploy.recover && {
   has "recover second worker" "docker service scale carapp_mailer=1"
 }
 check "multi workers prod" workers 0 -n deploy.prod && has "assert both workers" "carapp_mailer barlito/carapp-worker:v1.2.0"
+
+check "no workers: plain stack deploy" custom 0 -n deploy.prod && {
+  hasnt "no override without workers" "replicas: 0"
+  hasnt "no worker start without workers" "docker service scale"
+}
+check "deploy.prod migrates through the exact-label lookup" carapp 0 -n deploy.prod && {
+  has "app lookup by exact label" "acid=\"\$(docker ps -q --filter label=com.docker.swarm.service.name=carapp_php | head -n1)\""
+  hasnt "no app_container_id in prod" "app_container_id"
+}
+check "deploy.migrate main_service" carapp 0 -n deploy.migrate main_service=web && has "migrate uses main_service" "service.name=carapp_web"
+FAKE_APP_CID="" check "deploy.migrate without app" carapp fail deploy.migrate && has "migrate without app explained" "cannot migrate"
+FAKE_APP_CID=$'a1\na2' check "deploy.migrate several replicas" carapp 0 deploy.migrate && grep -qE 'exec -t (APPCID|a1|a2) bin/console doctrine:migrations:migrate' "$work/docker.log" && pass "migrate runs in one container" || fail "migrate"
+
+# --- recover: workers go back on the rollback tag, or stay drained
+rstate="$work/recover-state"
+rm -f "$rstate"
+check "recover without state scales up" carapp 0 -n deploy.recover recover_state="$rstate" && has "plain scale up" "docker service scale carapp_message_worker=1"
+echo unsafe > "$rstate"
+check "recover with unsafe state" carapp fail -n deploy.recover recover_state="$rstate" && {
+  has "unsafe state is loud" "ERROR: workers stay drained"
+  hasnt "unsafe state scales nothing" "docker service scale carapp_message_worker=1"
+}
+echo v1.1.0 > "$rstate"
+check "recover after the database step" carapp 0 -n deploy.recover recover_state="$rstate" && {
+  order "workers updated to the rollback tag before scaling up" "docker service update --with-registry-auth --image barlito/carapp-worker:v1.1.0 carapp_message_worker" "docker service scale carapp_message_worker=1"
+}
+echo 'v1;x' > "$rstate"
+check "recover with a corrupt state" carapp fail -n deploy.recover recover_state="$rstate" && has "corrupt state refused" "unreadable"
+rm -f "$rstate"
+check "recover unsafe without workers" custom 0 -n deploy.recover && hasnt "nothing to recover" "docker service"
 
 # --- assert variables
 check "assert override" carapp 0 -n deploy.assert_image assert_service=other assert_image=foo/bar && has "assert override command" "assert-deployed carapp_other foo/bar:v1.2.0"
@@ -245,7 +290,7 @@ grep -q 'sh carapp-20260101-120000.dump DROP SCHEMA IF EXISTS public CASCADE; CR
 grep -q 'pg_restore -U' "$work/docker.log" && fail "pg_restore writes straight to the db" || pass "pg_restore never commits on its own"
 grep -q 'psql.*-c ' "$work/docker.log" && fail "separate committed psql call" || pass "no separate committed reset"
 : > "$work/docker.log"
-FAKE_CID=abc check "db.restore several schemas" carapp 0 db.restore dump=x.dump db_schemas="public audit" && grep -q 'DROP SCHEMA IF EXISTS audit CASCADE; CREATE SCHEMA audit AUTHORIZATION carapp;' "$work/docker.log" && pass "every schema reset" || fail "schemas: $(cat "$work/docker.log")"
+FAKE_CID=abc check "db.restore several schemas" carapp 0 db.restore dump=x.dump db_schemas="public audit" && grep -q 'DROP SCHEMA IF EXISTS public CASCADE; DROP SCHEMA IF EXISTS audit CASCADE; CREATE SCHEMA public AUTHORIZATION carapp;$' "$work/docker.log" && pass "every schema dropped, only public recreated (pg_dump creates the others)" || fail "schemas: $(cat "$work/docker.log")"
 : > "$work/docker.log"
 FAKE_CID=abc check "db.restore named dump" carapp 0 db.restore dump=carapp-x.dump && grep -q '/backups/carapp-x.dump' "$work/docker.log" && pass "named dump restored" || fail "named dump"
 FAKE_CID=abc FAKE_MISSING=1 check "db.restore missing dump" carapp fail db.restore dump=carapp-x.dump && has "missing dump explained" "not found in"
@@ -296,6 +341,38 @@ picked="$(cd "$work/dumps" && ls -1t $glob | head -1)"
 FAKE_CID=abc RESTORE=1 TAG='v1;x' check "rollback.resolve unsafe TAG" carapp fail rollback.resolve rollback_state="$work/state" && has "unsafe TAG refused" "not allowed in a dump name"
 FAKE_CID=abc FAKE_LATEST="" RESTORE=1 check "rollback.resolve no dump for the version" carapp fail rollback.resolve rollback_state="$work/state" && has "missing version dump explained" "No dump to restore"
 FAKE_CID=abc RESTORE=my.dump TAG='v1;x' check "rollback.resolve named dump ignores TAG" carapp 0 rollback.resolve rollback_state="$work/state"
+
+# --- backup retention: the newest backup_keep dumps of the prefix just written survive
+: > "$work/docker.log"
+FAKE_CID=abc FAKE_IMAGE='barlito/carapp:v1.1.0' check "db.backup retention default" carapp 0 db.backup
+grep -qF 'ls -1 /backups/carapp-v1.1.0-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].dump' "$work/docker.log" && grep -qF 'tail -n +11 | xargs -r rm -f --' "$work/docker.log" && pass "keeps 10 per versioned prefix by default" || fail "retention: $(cat "$work/docker.log")"
+: > "$work/docker.log"
+FAKE_CID=abc check "db.backup retention rollback prefix" carapp 0 db.backup backup_label=rollback backup_keep=3
+grep -qF '/backups/carapp_rollback-[0-9]' "$work/docker.log" && grep -qF 'tail -n +4 ' "$work/docker.log" && pass "retention scoped to the rollback prefix" || fail "rollback retention: $(cat "$work/docker.log")"
+: > "$work/docker.log"
+FAKE_CID=abc check "db.backup retention unversioned prefix" carapp 0 db.backup && grep -qF '/backups/carapp_unversioned-[0-9]' "$work/docker.log" && pass "retention scoped to the unversioned prefix" || fail "unversioned retention"
+: > "$work/docker.log"
+FAKE_CID=abc check "db.backup retention disabled" carapp 0 db.backup backup_keep=0
+grep -q 'pg_dump' "$work/docker.log" && ! grep -q 'xargs' "$work/docker.log" && pass "backup_keep=0 keeps every dump" || fail "retention not disabled"
+: > "$work/docker.log"
+FAKE_CID=abc check "db.backup invalid retention" carapp fail db.backup backup_keep=ten && has "invalid retention explained" "backup_keep must be a number"
+grep -q 'pg_dump' "$work/docker.log" && fail "backup ran with an invalid backup_keep" || pass "invalid backup_keep stops before the dump"
+
+# the retention one-liner against real files: newest by name, other prefixes untouched
+mkdir "$work/ret"
+for f in carapp-v1-20260101-000001 carapp-v1-20260101-000002 carapp-v1-20260101-000003 carapp-v1-20260101-000004 carapp_rollback-20260101-000001 carapp-v1-2-20260101-000001; do : > "$work/ret/$f.dump"; done
+(cd "$work/ret" && ls -1 carapp-v1-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].dump | sort -r | tail -n +3 | xargs -r rm -f --)
+[ "$(ls "$work/ret" | tr '\n' ' ')" = "carapp-v1-2-20260101-000001.dump carapp-v1-20260101-000003.dump carapp-v1-20260101-000004.dump carapp_rollback-20260101-000001.dump " ] && pass "retention drops only the oldest of its own prefix" || fail "retention result: $(ls "$work/ret")"
+
+# --- smoke test retries the whole request
+: > "$FAKE_CURL_LOG"; echo 0 > "$FAKE_CURL_COUNT"
+FAKE_CURL_FAILS=2 check "smoke succeeds after failures" carapp 0 smoke.test smoke_retries=3 smoke_delay=0 && has "smoke retried" "attempt 2/3 failed"
+[ "$(grep -c "^curl" "$FAKE_CURL_LOG")" = 3 ] && pass "curl called until it answered" || fail "curl calls: $(cat "$FAKE_CURL_LOG")"
+echo 0 > "$FAKE_CURL_COUNT"
+FAKE_CURL_FAILS=99 check "smoke gives up" carapp fail smoke.test smoke_retries=3 smoke_delay=0 && has "smoke failure reported" "Smoke test FAILED"
+[ "$(cat "$FAKE_CURL_COUNT")" = 3 ] && pass "exactly smoke_retries attempts" || fail "attempts: $(cat "$FAKE_CURL_COUNT")"
+echo 0 > "$FAKE_CURL_COUNT"
+check "smoke first try" carapp 0 smoke.test && [ "$(cat "$FAKE_CURL_COUNT")" = 1 ] && pass "no retry when the app answers" || fail "smoke first try"
 
 # --- castor missing: fail before any side effect
 mkdir "$work/nocastor"

@@ -50,5 +50,25 @@ mk db.restore dump=pgtest-corrupt-20260101-000000.dump >/dev/null 2>&1 && fail "
 mk db.restore dump="$dump" db_schemas="public 1bad" >/dev/null 2>&1 && fail "broken restore SQL reported success" || pass "restore failing midway is reported"
 [ "$(rows)" = "precious" ] && pass "failed transaction keeps the previous schema" || fail "data after midway failure: $(rows)"
 
+# A dump holding a non-public schema: pg_dump emits CREATE SCHEMA for it, so the reset must only drop it
+sql "UPDATE t SET v = 'original'; CREATE SCHEMA audit; CREATE TABLE audit.log (id int, msg text); INSERT INTO audit.log VALUES (1, 'kept')" >/dev/null
+mk db.backup >/dev/null || fail "db.backup with a second schema failed"
+audit_dump="$(docker exec "$name" sh -c 'ls -1t /backups/pgtest_unversioned-*.dump | head -1' | xargs -r basename)"
+sql "UPDATE t SET v = 'mutated'; INSERT INTO audit.log VALUES (2, 'extra'); CREATE TABLE audit.junk (a int); CREATE TABLE pubjunk (a int)" >/dev/null
+mk db.restore dump="$audit_dump" db_schemas="public audit" >/dev/null 2>"$work/err" && pass "restore of a dump with a non-public schema" || fail "restore with schema audit: $(cat "$work/err")"
+[ "$(rows)" = "original" ] && pass "public rows restored" || fail "public rows: $(rows)"
+[ "$(sql 'SELECT string_agg(msg, $$,$$) FROM audit.log')" = "kept" ] && pass "audit schema restored" || fail "audit rows: $(sql 'SELECT string_agg(msg, $$,$$) FROM audit.log' 2>&1)"
+[ "$(sql "SELECT to_regclass('audit.junk')")" = "" ] && [ "$(sql "SELECT to_regclass('pubjunk')")" = "" ] && pass "objects created after the backup are gone from both schemas" || fail "junk survived in a schema"
+
+# Retention: only the newest backup_keep dumps of the prefix stay
+for _ in 1 2 3; do sleep 1; mk db.backup backup_keep=2 >/dev/null || fail "db.backup with retention failed"; done
+count="$(docker exec "$name" sh -c 'ls -1 /backups/pgtest_unversioned-*.dump | wc -l')"
+[ "$count" = 2 ] && pass "backup_keep=2 leaves the 2 newest dumps" || fail "dumps left: $count"
+docker exec "$name" sh -c 'touch /backups/pgtest_rollback-20200101-000000.dump /backups/pgtest-v1-20200101-000000.dump'
+sleep 1; mk db.backup backup_keep=1 >/dev/null
+docker exec "$name" sh -c 'ls /backups/pgtest_rollback-20200101-000000.dump /backups/pgtest-v1-20200101-000000.dump' >/dev/null 2>&1 && pass "other prefixes are never pruned" || fail "retention touched another prefix"
+sleep 1; mk db.backup backup_keep=0 >/dev/null; sleep 1; mk db.backup backup_keep=0 >/dev/null
+[ "$(docker exec "$name" sh -c 'ls -1 /backups/pgtest_unversioned-*.dump | wc -l')" -ge 3 ] && pass "backup_keep=0 disables retention" || fail "backup_keep=0 pruned"
+
 if [ "$failures" -gt 0 ]; then echo "$failures failure(s)"; exit 1; fi
 echo "all postgres tests passed"
