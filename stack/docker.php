@@ -2,6 +2,7 @@
 
 namespace Barlito\Castor;
 
+use Castor\Attribute\AsOption;
 use Castor\Attribute\AsTask;
 
 use function Castor\capture;
@@ -12,7 +13,7 @@ use function Castor\run;
 function runningContainerId(string $name): string
 {
     $ids = trim(capture(
-        ['docker', 'ps', '-q', '--filter', "name={$name}", '--filter', 'status=running'],
+        ['docker', 'ps', '-q', '--filter', "label=com.docker.swarm.service.name={$name}", '--filter', 'status=running'],
         context: context()->withAllowFailure(),
     ));
 
@@ -44,10 +45,12 @@ function waitForReadyContainer(string $name, int $maxAttempts = 90, int $interva
 }
 
 #[AsTask('wait-php-container')]
-function waitPhpContainer(): void
-{
+function waitPhpContainer(
+    #[AsOption(description: 'Swarm service of the app, without the stack prefix')]
+    string $service = 'php',
+): void {
     $STACK_NAME = context()->environment['STACK_NAME'];
-    $containerName = "{$STACK_NAME}_php";
+    $containerName = "{$STACK_NAME}_{$service}";
 
     io()->info("Waiting for container {$containerName} to start...");
     waitForReadyContainer($containerName);
@@ -55,11 +58,17 @@ function waitPhpContainer(): void
 }
 
 #[AsTask('wait-db-container')]
-function waitDbContainer(): void
-{
+function waitDbContainer(
+    #[AsOption(description: 'Swarm service of the database, without the stack prefix; also its host name')]
+    string $service = 'db',
+    #[AsOption(description: 'Swarm service of the app, without the stack prefix')]
+    string $phpService = 'php',
+    #[AsOption(description: 'Database port')]
+    int $port = 5432,
+): void {
     $STACK_NAME = context()->environment['STACK_NAME'];
-    $dbContainer = "{$STACK_NAME}_db";
-    $phpContainer = "{$STACK_NAME}_php";
+    $dbContainer = "{$STACK_NAME}_{$service}";
+    $phpContainer = "{$STACK_NAME}_{$phpService}";
 
     io()->info("Waiting for database container {$dbContainer} to be ready...");
     waitForReadyContainer($dbContainer);
@@ -75,7 +84,7 @@ function waitDbContainer(): void
     $dnsMaxAttempts = 30;
     for ($i = 0; $i < $dnsMaxAttempts; $i++) {
         $result = run(
-            "docker exec {$phpContainerId} php -r \"@stream_socket_client('tcp://db:5432', \\\$e, \\\$m, 2) ? exit(0) : exit(1);\"",
+            "docker exec {$phpContainerId} php -r \"@stream_socket_client('tcp://{$service}:{$port}', \\\$e, \\\$m, 2) ? exit(0) : exit(1);\"",
             context: context()->withAllowFailure()
         );
         if ($result->isSuccessful()) {
@@ -86,5 +95,5 @@ function waitDbContainer(): void
         sleep(2);
     }
 
-    throw new \RuntimeException("Database host 'db' is not reachable from PHP container after {$dnsMaxAttempts} attempts.");
+    throw new \RuntimeException("Database host '{$service}' is not reachable from PHP container after {$dnsMaxAttempts} attempts.");
 }

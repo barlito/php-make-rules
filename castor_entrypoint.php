@@ -7,3 +7,4 @@ use function Castor\import;
 import('make/stack/stack.php');
 import('make/stack/docker.php');
 import('make/stack/deploy.php');
+import('make/stack/migrations.php');
